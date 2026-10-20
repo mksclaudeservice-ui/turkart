@@ -2,7 +2,7 @@ import './style.css';
 import { supabase, configured, signedUrls, BUCKET } from './supabase.js';
 import { TurMap, miniMap, miniMapPoints, miniMapTrack, drawLines } from './map.js';
 import { isTrackFile, parseTrackFile, positionAt, withinTrack, profileSvg } from './tracks.js';
-import { searchPlaces, elevationFor, nameForPoint } from './geo.js';
+import { searchPlaces, elevationFor, nameForPoint, distanceKm } from './geo.js';
 import { isImageFile, processFile, existingHashes, uploadAll, squareJpeg } from './upload.js';
 import { clusterPhotos, suggestForGroups } from './grouping.js';
 
@@ -181,6 +181,21 @@ async function adoptUnsortedForTrack(track, visit, place) {
     await supabase.from('photos').update(patch).eq('id', ph.id);
   }
   return cand.length;
+}
+const NO_SUMMIT_KINDS = new Set(['padletur', 'sykkeltur']);
+/** Flytt nålen til sporets høyeste punkt (for fjellturer). Returnerer true hvis den ble flyttet. */
+async function placeToSummit(placeId, lines) {
+  const place = state.places.find((p) => p.id === placeId);
+  if (place && (place.mode !== 'fjell' || NO_SUMMIT_KINDS.has(place.kind))) return false;
+  let top = null;
+  for (const pts of lines) for (const q of pts ?? []) if (q[2] != null && (!top || q[2] > top[2])) top = q;
+  if (!top) return false;
+  if (place && distanceKm({ lat: place.lat, lon: place.lon }, { lat: top[0], lon: top[1] }) < 0.05 && place.elevation === top[2]) return false;
+  const patch = { lat: top[0], lon: top[1], elevation: top[2] };
+  const { error } = await supabase.from('places').update(patch).eq('id', placeId);
+  if (error) return console.warn(error), false;
+  if (place) Object.assign(place, patch);
+  return true;
 }
 async function insertTrack(visitId, tr) {
   const dup = state.tracks.find((x) => x.started_at && tr.start && new Date(x.started_at).getTime() === tr.start.getTime());
@@ -582,6 +597,12 @@ async function showDetailTracks(sel, detailMap) {
   }
   if (state.selected?.id !== sel.id) return;
   const lines = ids.map((id) => state.trackPoints.get(id)).filter(Boolean);
+  if (sel.type === 'place' && (await placeToSummit(sel.id, lines))) {
+    const pl = state.places.find((p) => p.id === sel.id);
+    render();
+    if (pl) toast(`Nålen er flyttet til toppen (${num(pl.elevation)} moh.)`);
+    return;
+  }
   state.map.showTracks(lines, { fit: sel.type === 'place' && !isMobile() });
   if (detailMap) drawLines(detailMap, lines, { weight: 3, fit: true });
   document.querySelectorAll('[data-track-profile]').forEach((el) => {
@@ -929,6 +950,7 @@ function visitForm(place, existing = null) {
         try {
           const tr = await parseTrackFile(file);
           await insertTrack(existing.id, tr);
+          await placeToSummit(place.id, [tr.points]);
           // Fyll inn tomme felt fra sporet, så de lagres med besøket.
           const fill = (sel, val) => {
             const el = $(sel, d);
@@ -1400,6 +1422,7 @@ async function saveGroups(groups, d) {
         if (visit.duration_min == null && tr.durationMin != null) patch.duration_min = tr.durationMin;
         if (Object.keys(patch).length) await supabase.from('visits').update(patch).eq('id', visit.id);
         await insertTrack(visit.id, tr);
+        await placeToSummit(placeId, [tr.points]);
       }
       saved++;
     }
