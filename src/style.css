@@ -293,7 +293,15 @@ progress { width: 100%; height: 10px; accent-color: var(--fjell); }
   .side-head { display: flex; }
   .side-toggle { display: inline-flex; }
   .shell:has(.detail:not([hidden])) .side-toggle { display: none; }
-  .detail { position: fixed; inset: auto 0 0 0; top: 12vh; width: auto; border-radius: 18px 18px 0 0; z-index: 1500; padding-bottom: max(20px, env(safe-area-inset-bottom)); }
+  .detail {
+    position: fixed; inset: auto 0 0 0; top: calc(var(--top-h, 64px) + 8px); width: auto; border-radius: 18px 18px 0 0;
+    z-index: 1500; padding-top: 0; padding-bottom: max(20px, env(safe-area-inset-bottom));
+  }
+  .detail .detail-head {
+    position: sticky; top: 0; z-index: 3; margin: 0 -20px; padding: 12px 20px 8px;
+    background: var(--surface); border-radius: 18px 18px 0 0;
+  }
+  .mobile-only { display: flex !important; }
 }
 
 /* Notater */
@@ -407,3 +415,9 @@ progress { width: 100%; height: 10px; accent-color: var(--fjell); }
 }
 .side-toggle svg { color: var(--accent); }
 @media (prefers-reduced-motion: reduce) { .side, .side-backdrop { transition: none !important; } }
+
+/* Kart i turkortet (mobil) */
+.mobile-only { display: none !important; }
+.detail-map-wrap { flex-direction: column; gap: 8px; margin: 8px 0 4px; }
+.detail-map { height: 170px; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); background: var(--bg); }
+.detail-map-btn { align-self: stretch; }

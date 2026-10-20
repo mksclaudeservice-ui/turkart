@@ -59,6 +59,31 @@ export function miniMap(el, lat, lon, { zoom = 11, color = '#2F5D50' } = {}) {
   };
 }
 
+/** Lite kart med flere nåler, tilpasset slik at alle vises. */
+export function miniMapPoints(el, points, { color = '#2F5D50', maxZoom = 12 } = {}) {
+  const pts = points.filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon));
+  if (!pts.length) return null;
+  const map = L.map(el, {
+    zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false,
+    doubleClickZoom: false, boxZoom: false, keyboard: false, touchZoom: false, tap: false
+  });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, opacity: 0.6 }).addTo(map);
+  L.tileLayer('https://cache.kartverket.no/v1/wmts/1.0.0/topo/default/webmercator/{z}/{y}/{x}.png', { maxZoom: 18 }).addTo(map);
+  for (const p of pts) {
+    const icon = L.divIcon({ className: 'pin pin--mini', html: '', iconSize: [18, 18], iconAnchor: [9, 9] });
+    const m = L.marker([p.lat, p.lon], { icon, interactive: false }).addTo(map);
+    m.getElement()?.style.setProperty('background', p.color ?? color);
+  }
+  const fit = () => {
+    map.invalidateSize();
+    if (pts.length === 1) map.setView([pts[0].lat, pts[0].lon], maxZoom);
+    else map.fitBounds(L.latLngBounds(pts.map((p) => [p.lat, p.lon])).pad(0.3), { maxZoom });
+  };
+  fit();
+  setTimeout(fit, 60);
+  return map;
+}
+
 export class TurMap {
   constructor(el, { onPlaceClick, onMapClick }) {
     this.map = L.map(el, { zoomControl: false, worldCopyJump: true }).setView([64.5, 12], 5);

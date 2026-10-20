@@ -1,6 +1,6 @@
 import './style.css';
 import { supabase, configured, signedUrls, BUCKET } from './supabase.js';
-import { TurMap, miniMap } from './map.js';
+import { TurMap, miniMap, miniMapPoints } from './map.js';
 import { searchPlaces, elevationFor, nameForPoint } from './geo.js';
 import { isImageFile, processFile, existingHashes, uploadAll, squareJpeg } from './upload.js';
 import { clusterPhotos, suggestForGroups } from './grouping.js';
@@ -58,6 +58,7 @@ const ICON = {
   link: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>',
   list: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>',
   chevronLeft: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>',
+  pin: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>',
   trash: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>',
   close: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>'
 };
@@ -477,7 +478,18 @@ function renderDetail() {
   }
   el.hidden = false;
   el.innerHTML = sel.type === 'place' ? placeDetail(state.places.find((p) => p.id === sel.id)) : tripDetail(state.trips.find((t) => t.id === sel.id));
+  el.scrollTop = 0;
   hydrateThumbs();
+  const mapEl = $('#detail-map', el);
+  if (mapEl && isMobile()) {
+    if (sel.type === 'place') {
+      const p = state.places.find((x) => x.id === sel.id);
+      if (p) miniMapPoints(mapEl, [{ lat: p.lat, lon: p.lon, color: p.mode === 'reise' ? '#2B5C8A' : '#2F5D50' }], { maxZoom: 12 });
+    } else {
+      const t = state.trips.find((x) => x.id === sel.id);
+      if (t) miniMapPoints(mapEl, tripStops(t).map((p) => ({ lat: p.lat, lon: p.lon, color: p.mode === 'reise' ? '#2B5C8A' : '#2F5D50' })), { maxZoom: 11 });
+    }
+  }
 }
 
 function photoGrid(photos) {
@@ -500,6 +512,14 @@ function coverBlock(type, item, cover) {
   </div>`;
 }
 
+function detailMapBlock(type, id, hasPoints) {
+  if (!hasPoints) return '';
+  return `<div class="detail-map-wrap mobile-only">
+    <div class="detail-map" id="detail-map" aria-hidden="true"></div>
+    <button type="button" class="btn btn--ghost detail-map-btn" data-action="show-on-map" data-type="${type}" data-id="${id}">${ICON.pin}Vis i hovedkartet</button>
+  </div>`;
+}
+
 function placeDetail(p) {
   if (!p) return '';
   const trips = [...new Set(p.visitsList.map((v) => v.trip_id).filter(Boolean))].map((id) => state.trips.find((t) => t.id === id)).filter(Boolean);
@@ -511,6 +531,7 @@ function placeDetail(p) {
     ${coverBlock('place', p, placeCover(p))}
     <h2>${esc(p.name)}</h2>
     <p class="muted">${[p.elevation ? `${num(p.elevation)} moh.` : '', p.country].filter(Boolean).join(' · ')}</p>
+    ${detailMapBlock('place', p.id, true)}
     ${p.status === 'wish' && (p.wish_season || p.wish_priority) ? `<p>${p.wish_season ? `Beste tid: ${esc(p.wish_season)}. ` : ''}${p.wish_priority ? `Prioritet: ${['', 'høy', 'middels', 'lav'][p.wish_priority]}.` : ''}</p>` : ''}
     ${p.notes ? `<p class="note">${esc(p.notes)}</p>` : ''}
     ${p.visitsList.length ? `<h3 class="eyebrow">Besøk</h3><ul class="visits">${p.visitsList
@@ -550,6 +571,7 @@ function tripDetail(t) {
     <h2>${esc(t.title)}</h2>
     <p class="muted">${[fmtRange(t.start_date, t.end_date), nights(t.start_date, t.end_date) ? `${nights(t.start_date, t.end_date)} netter` : '', t.countries.join(', ')].filter(Boolean).join(' · ')}</p>
     ${peopleRow(t.people)}
+    ${detailMapBlock('trip', t.id, stops.length > 0)}
     ${t.notes ? `<p class="note">${esc(t.notes)}</p>` : ''}
     <div class="section-head"><h3 class="eyebrow">Turer på reisen${tours.length ? ` (${tours.length})` : ''}</h3>
       <button type="button" class="btn btn--link btn--xs" data-action="link-tours" data-id="${t.id}">${ICON.link}Koble til turer</button></div>
@@ -1608,6 +1630,19 @@ document.addEventListener('click', async (e) => {
     return;
   }
   const id = t.dataset.id;
+  if (a === 'show-on-map') {
+    const type = t.dataset.type;
+    state.selected = null;
+    render();
+    if (type === 'place') {
+      const p = state.places.find((x) => x.id === id);
+      if (p) state.map.flyTo(p, 13);
+    } else {
+      const tr = state.trips.find((x) => x.id === id);
+      if (tr) state.map.fitTo(tripStops(tr));
+    }
+    return;
+  }
   if (a === 'side-open') return setSide(true);
   if (a === 'side-close') return setSide(false);
   if (isMobile() && (a === 'select-place' || a === 'select-trip') && t.closest('.side')) setSide(false);
