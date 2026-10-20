@@ -1,7 +1,7 @@
 import './style.css';
 import { supabase, configured, signedUrls, BUCKET } from './supabase.js';
 import { TurMap, miniMap, miniMapPoints, miniMapTrack, drawLines } from './map.js';
-import { isTrackFile, parseTrackFile, positionAt, withinTrack, profileSvg } from './tracks.js';
+import { isTrackFile, parseTrackFile, positionAt, withinTrack, profileSvg, clusterTracks } from './tracks.js';
 import { searchPlaces, elevationFor, nameForPoint, distanceKm } from './geo.js';
 import { isImageFile, processFile, existingHashes, uploadAll, squareJpeg } from './upload.js';
 import { clusterPhotos, suggestForGroups } from './grouping.js';
@@ -921,7 +921,7 @@ function visitForm(place, existing = null) {
       </div>
       ${existing ? `<fieldset class="vf-tracks"><legend>Spor fra klokka</legend>
         ${(v0.tracks ?? []).map((t) => `<div class="vf-track">${ICON.route}<span>${esc(t.original_name ?? 'Spor')} · ${[fmtKm(t.distance_km), t.ascent_m != null ? `${num(t.ascent_m)} hm` : ''].filter(Boolean).join(' · ')}</span><button type="button" class="icon-btn icon-btn--sm" data-del-track="${t.id}" aria-label="Fjern spor">${ICON.trash}</button></div>`).join('')}
-        <label class="btn btn--ghost btn--file btn--sm">${ICON.upload}<span class="vf-track-label">Legg til spor (GPX, FIT, TCX)</span><input type="file" accept=".gpx,.fit,.tcx" id="vf-track" /></label>
+        <label class="btn btn--ghost btn--file btn--sm">${ICON.upload}<span class="vf-track-label">Legg til spor (GPX, FIT, TCX – gjerne flere)</span><input type="file" accept=".gpx,.fit,.tcx" id="vf-track" multiple /></label>
       </fieldset>` : ''}
       <label class="field"><span>Notat</span><textarea id="vf-notes" rows="3">${esc(v0.notes ?? '')}</textarea></label>
       <div class="dlg-actions">
@@ -943,31 +943,47 @@ function visitForm(place, existing = null) {
         })
       );
       $('#vf-track', d)?.addEventListener('change', async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
+        const files = [...e.target.files];
+        if (!files.length) return;
         const label = $('.vf-track-label', d);
-        label.textContent = 'Leser spor …';
+        label.textContent = files.length > 1 ? `Leser ${files.length} spor …` : 'Leser spor …';
         try {
-          const tr = await parseTrackFile(file);
-          await insertTrack(existing.id, tr);
-          await placeToSummit(place.id, [tr.points]);
+          const parts = [];
+          for (const f of files) parts.push(await parseTrackFile(f));
+          for (const part of parts) await insertTrack(existing.id, part);
+          const merged = clusterTracks(parts);
+          const tr = merged.length === 1 ? merged[0] : parts[0];
+          const allPts = [...(existing.tracks ?? []).map((t) => state.trackPoints.get(t.id)).filter(Boolean), ...parts.map((t) => t.points)];
+          await placeToSummit(place.id, allPts);
           // Fyll inn tomme felt fra sporet, så de lagres med besøket.
           const fill = (sel, val) => {
             const el = $(sel, d);
             if (el && !el.value && val != null) el.value = String(val).replace('.', ',');
           };
-          fill('#vf-km', tr.distanceKm);
-          fill('#vf-hm', tr.ascentM);
-          fill('#vf-min', tr.durationMin);
+          const prev = existing.tracks ?? [];
+          if (prev.length) {
+            // Flere spor på samme besøk: vis totalen for alle sporene.
+            const tot = (a, b) => [...prev.map((t) => t[a]), ...parts.map((t) => t[b])].reduce((s, x) => s + (x ?? 0), 0);
+            const set = (sel, val) => { const el = $(sel, d); if (el && val) el.value = String(Math.round(val * 100) / 100).replace('.', ','); };
+            set('#vf-km', tot('distance_km', 'distanceKm'));
+            set('#vf-hm', tot('ascent_m', 'ascentM'));
+            set('#vf-min', tot('duration_min', 'durationMin'));
+          } else {
+            fill('#vf-km', tr.distanceKm);
+            fill('#vf-hm', tr.ascentM);
+            fill('#vf-min', tr.durationMin);
+          }
           if (!$('#vf-date', d).value && tr.start) $('#vf-date', d).value = isoDay(tr.start);
           const adopted = await adoptUnsortedForTrack(tr, existing, place);
           await loadData();
           render();
-          label.textContent = 'Legg til spor (GPX, FIT, TCX)';
-          $('.vf-tracks', d).insertAdjacentHTML('afterbegin', `<div class="vf-track">${ICON.route}<span>${esc(tr.name)} · ${fmtKm(tr.distanceKm)}${tr.ascentM != null ? ` · ${num(tr.ascentM)} hm` : ''}</span></div>`);
-          toast(adopted ? `Spor lagt til, og ${adopted} bilder fra Usortert koblet til` : 'Spor lagt til');
+          label.textContent = 'Legg til spor (GPX, FIT, TCX – gjerne flere)';
+          for (const part of parts) $('.vf-tracks', d).insertAdjacentHTML('afterbegin', `<div class="vf-track">${ICON.route}<span>${esc(part.name)} · ${fmtKm(part.distanceKm)}${part.ascentM != null ? ` · ${num(part.ascentM)} hm` : ''}</span></div>`);
+          e.target.value = '';
+          const what = parts.length > 1 ? `${parts.length} spor lagt til` : 'Spor lagt til';
+          toast(adopted ? `${what}, og ${adopted} bilder fra Usortert koblet til` : what);
         } catch (err) {
-          label.textContent = 'Legg til spor (GPX, FIT, TCX)';
+          label.textContent = 'Legg til spor (GPX, FIT, TCX – gjerne flere)';
           toast(`Kunne ikke lese sporet: ${err.message}`, 'err');
         }
       });
@@ -1150,7 +1166,7 @@ async function runUpload(files, d) {
     body.innerHTML = `<p><b>${label}</b> ${done} av ${total}</p><progress max="${total}" value="${done}"></progress><div class="strip" id="strip"></div>`;
   };
   // 0. Les spor
-  const tracks = [];
+  let tracks = [];
   let failed = 0;
   for (let i = 0; i < trackFiles.length; i++) {
     progress('Leser spor …', i, trackFiles.length);
@@ -1162,6 +1178,8 @@ async function runUpload(files, d) {
       failed++;
     }
   }
+  // Flere sporfiler fra samme tur slås sammen til én tur.
+  tracks = clusterTracks(tracks);
   // 1. Les og forbered
   const items = [];
   progress('Leser bilder …', 0, files.length);
@@ -1246,7 +1264,7 @@ async function runUpload(files, d) {
     if (g.track) {
       const el = $(`#g${i}-preview`, d);
       el.innerHTML = '<div class="minimap"></div>';
-      miniMapTrack($('.minimap', el), g.track.points);
+      miniMapTrack($('.minimap', el), g.track.points, { lines: g.track.parts?.map((t) => t.points) });
       return () => {};
     }
     return mountPreview($(`#g${i}-preview`, d), g.center?.lat, g.center?.lon);
@@ -1286,7 +1304,7 @@ function groupCard(g, i) {
   const tr = g.track;
   return `<div class="gcard ${tr ? 'gcard--track' : ''}" data-i="${i}" data-choice="${g.nearby.length ? 'existing' : 'new'}">
     ${g.items.length ? `<div class="gstrip">${g.items.slice(0, 6).map((it) => (it.thumbUrl ? `<img alt="" src="${it.thumbUrl}" />` : `<img alt="" data-thumb="${esc(it.thumb_path)}" />`)).join('')}${g.items.length > 6 ? `<span>+${g.items.length - 6}</span>` : ''}</div>` : ''}
-    <p class="gmeta">${tr ? `${ICON.route}<b>Spor</b> · ` : ''}<b>${g.items.length} bilder</b> · ${date}</p>
+    <p class="gmeta">${tr ? `${ICON.route}<b>${tr.parts ? `${tr.parts.length} spor` : 'Spor'}</b> · ` : ''}<b>${g.items.length} bilder</b> · ${date}</p>
     ${tr ? `<p class="gtrack-stats">${[fmtKm(tr.distanceKm), tr.ascentM != null ? `${num(tr.ascentM)} hm` : '', fmtDuration(tr.durationMin), tr.maxEle != null ? `topp ${num(tr.maxEle)} moh.` : ''].filter(Boolean).join(' · ')}${g.items.some((it) => it.existing) ? ` · ${g.items.filter((it) => it.existing).length} fra Usortert` : ''}</p>` : ''}
     ${g.noPosition ? `<p class="warnbox">Bildene mangler posisjon. Søk opp stedet under, så lagres turen likevel. <span class="muted">Tips: På iPhone, trykk <b>Valg</b> øverst i bildevelgeren og slå på <b>Posisjon</b>.</span></p>` : ''}
     <label class="field"><span>Hva er dette?</span>
@@ -1421,7 +1439,7 @@ async function saveGroups(groups, d) {
         if (visit.ascent_m == null && tr.ascentM != null) patch.ascent_m = tr.ascentM;
         if (visit.duration_min == null && tr.durationMin != null) patch.duration_min = tr.durationMin;
         if (Object.keys(patch).length) await supabase.from('visits').update(patch).eq('id', visit.id);
-        await insertTrack(visit.id, tr);
+        for (const part of tr.parts ?? [tr]) await insertTrack(visit.id, part);
         await placeToSummit(placeId, [tr.points]);
       }
       saved++;

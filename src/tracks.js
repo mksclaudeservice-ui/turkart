@@ -137,8 +137,57 @@ export async function parseTrackFile(file) {
   };
 }
 
+/** Slå sammen flere spor fra samme tur (f.eks. klokka stoppet underveis) til ett. Delene beholdes i .parts. */
+export function mergeTracks(list) {
+  if (list.length === 1) return list[0];
+  const parts = [...list].sort((a, b) => (a.start?.getTime() ?? 0) - (b.start?.getTime() ?? 0));
+  const sum = (k) => (parts.every((t) => t[k] == null) ? null : parts.reduce((s, t) => s + (t[k] ?? 0), 0));
+  const top = parts.filter((t) => t.maxEle != null).sort((a, b) => b.maxEle - a.maxEle)[0] ?? parts[0];
+  const ends = parts.map((t) => t.end).filter(Boolean);
+  const dist = sum('distanceKm');
+  return {
+    ...parts[0],
+    name: parts.map((t) => t.name).join(' + '),
+    parts,
+    start: parts[0].start,
+    end: ends.length ? new Date(Math.max(...ends.map((e) => e.getTime()))) : null,
+    durationMin: sum('durationMin'),
+    distanceKm: dist != null ? Math.round(dist * 100) / 100 : null,
+    ascentM: sum('ascentM'),
+    maxEle: top.maxEle,
+    summit: top.summit,
+    points: parts.flatMap((t) => t.points)
+  };
+}
+
+/** Grupper spor som hører til samme tur: samme dag og enten tett i tid (≤ 5 t) eller nær hverandre (≤ 10 km). */
+export function clusterTracks(tracks) {
+  const day = (d) => (d ? new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10) : null);
+  const sorted = [...tracks].sort((a, b) => (a.start?.getTime() ?? 0) - (b.start?.getTime() ?? 0));
+  const clusters = [];
+  for (const t of sorted) {
+    const c = clusters.find((cl) =>
+      cl.some((o) => {
+        if (!t.start || !o.start || day(t.start) !== day(o.start)) return false;
+        const gapH = Math.abs(t.start - (o.end ?? o.start)) / 3_600_000;
+        return gapH <= 5 || distanceKm(t.summit, o.summit) <= 10;
+      })
+    );
+    if (c) c.push(t);
+    else clusters.push([t]);
+  }
+  return clusters.map(mergeTracks);
+}
+
 /** Posisjon langs sporet for et gitt tidspunkt (lineær interpolasjon). Null hvis utenfor sporet. */
 export function positionAt(track, when, slackMin = 30) {
+  if (track.parts) {
+    for (const part of track.parts) {
+      const pos = positionAt(part, when, 0);
+      if (pos) return pos;
+    }
+    return track.parts.map((part) => positionAt(part, when, slackMin)).find(Boolean) ?? null;
+  }
   if (!track.start || !when) return null;
   const sec = (when.getTime() - track.start.getTime()) / 1000;
   const pts = track.points.filter((p) => p[3] != null);

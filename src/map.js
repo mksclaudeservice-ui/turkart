@@ -102,7 +102,7 @@ export function drawLines(map, lines, { color = '#d1461f', weight = 4, fit = fal
 }
 
 /** Lite, statisk kart som viser et spor. */
-export function miniMapTrack(el, points, { color = '#d1461f' } = {}) {
+export function miniMapTrack(el, points, { color = '#d1461f', lines = null } = {}) {
   const map = L.map(el, {
     zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false,
     doubleClickZoom: false, boxZoom: false, keyboard: false, touchZoom: false, tap: false
@@ -113,7 +113,7 @@ export function miniMapTrack(el, points, { color = '#d1461f' } = {}) {
     map.invalidateSize();
     map.fitBounds(L.latLngBounds(points.map((p) => [p[0], p[1]])).pad(0.15), { maxZoom: 14 });
   };
-  drawLines(map, [points], { color, weight: 3 });
+  drawLines(map, lines ?? [points], { color, weight: 3 });
   fit();
   setTimeout(fit, 60);
   return map;
