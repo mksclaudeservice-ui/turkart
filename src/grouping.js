@@ -86,10 +86,26 @@ export async function suggestForGroups(groups, places) {
         : { name: '', country: 'Norge', isPeak: true };
       continue;
     }
-    const nearby = places
-      .map((p) => ({ p, d: distanceKm(g.center, p) }))
-      .filter((x) => x.d <= MATCH_EXISTING_KM)
-      .sort((a, b) => a.d - b.d);
+    let nearby;
+    if (g.track) {
+      // Spor: et sted er truffet hvis sporet går innom det (innen 1 km), eller toppen er nær.
+      // Steder med besøk samme dag kommer først.
+      const day = g.start ? new Date(g.start.getTime() - g.start.getTimezoneOffset() * 60000).toISOString().slice(0, 10) : null;
+      const pts = g.track.points.filter((_, i) => i % 5 === 0);
+      nearby = places
+        .map((p) => {
+          let route = Infinity;
+          for (const q of pts) route = Math.min(route, distanceKm({ lat: q[0], lon: q[1] }, p));
+          return { p, d: Math.min(route, distanceKm(g.center, p)), sameDay: (p.visitsList ?? []).some((v) => v.visited_on === day) };
+        })
+        .filter((x) => x.d <= 1 || distanceKm(g.center, x.p) <= MATCH_EXISTING_KM)
+        .sort((a, b) => Number(b.sameDay) - Number(a.sameDay) || a.d - b.d);
+    } else {
+      nearby = places
+        .map((p) => ({ p, d: distanceKm(g.center, p) }))
+        .filter((x) => x.d <= MATCH_EXISTING_KM)
+        .sort((a, b) => a.d - b.d);
+    }
     g.nearby = nearby.map((x) => x.p);
     if (g.nearby.length) {
       g.suggestion = { name: g.nearby[0].name, country: g.nearby[0].country, isPeak: g.nearby[0].kind === 'topptur' };
