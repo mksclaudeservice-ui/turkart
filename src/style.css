@@ -427,3 +427,8 @@ progress { width: 100%; height: 10px; accent-color: var(--fjell); }
   .side-toggle { display: inline-flex; }
   .shell:has(.detail:not([hidden])) .side-toggle { display: none; }
 }
+
+/* Felt i kolonne-skjema skal ikke få fast høyde */
+.form > .field, fieldset > .field, .notes .note-new > .field, .g-new > .field { flex: 0 0 auto; }
+.hint-sm { margin: 0; font-size: 12px; }
+fieldset.visit-only { display: flex; flex-direction: column; gap: 10px; }

@@ -603,6 +603,7 @@ function tripOptions(selected) {
 
 function placeForm(existing = null, preset = {}) {
   const p = existing ?? { mode: state.mode, kind: state.mode === 'fjell' ? 'topptur' : 'sted', status: 'visited', ...preset };
+  const lastVisit = existing?.visitsList?.[0] ?? null;
   const kinds = state.mode === 'fjell' || p.mode === 'fjell' ? ['topptur', 'skitur', 'toppskitur', 'fjelltur', 'sykkeltur', 'padletur', 'klatring', 'utsikt', 'hytte', 'sted'] : ['sted', 'by', 'overnatting', 'utsikt', 'topptur'];
   const allKinds = [...new Set([...kinds, ...Object.keys(KIND_LABEL)])];
   openDialog(
@@ -633,16 +634,20 @@ function placeForm(existing = null, preset = {}) {
         <label class="field"><span>Beste tid</span><input id="pf-season" placeholder="F.eks. jul–aug" value="${esc(p.wish_season ?? '')}" /></label>
         <label class="field"><span>Prioritet</span><select id="pf-prio"><option value="">–</option>${[1, 2, 3].map((n) => `<option value="${n}" ${p.wish_priority === n ? 'selected' : ''}>${['', 'Høy', 'Middels', 'Lav'][n]}</option>`).join('')}</select></label>
       </div>
-      ${existing ? '' : `<fieldset class="visit-only"><legend>Besøk</legend>
+      <fieldset class="visit-only"><legend>${lastVisit && existing.visitsList.length > 1 ? 'Siste besøk' : 'Besøk'}</legend>
         <div class="field-row">
-          <label class="field"><span>Dato</span><input id="pf-date" type="date" value="${preset.date ?? ''}" /></label>
-          <label class="field"><span>Reise</span><select id="pf-trip">${tripOptions(preset.trip_id)}</select></label>
-        </div></fieldset>`}
+          <label class="field"><span>Dato</span><input id="pf-date" type="date" value="${lastVisit?.visited_on ?? preset.date ?? ''}" /></label>
+          <label class="field"><span>Reise</span><select id="pf-trip">${tripOptions(lastVisit?.trip_id ?? preset.trip_id)}</select></label>
+        </div>
+        ${peoplePicker('pf-people', lastVisit ? lastVisit.people ?? [] : existing ? [] : meIds())}
+        ${lastVisit && existing.visitsList.length > 1 ? '<p class="muted hint-sm">Andre besøk endres med «Endre» i turkortet.</p>' : ''}
+      </fieldset>
       <label class="field"><span>Notat</span><textarea id="pf-notes" rows="3">${esc(p.notes ?? '')}</textarea></label>
       <div class="dlg-actions"><button type="button" class="btn btn--ghost" data-action="close-dlg">Avbryt</button><button type="submit" class="btn btn--dark">Lagre</button></div>
     </form>`,
     (d) => {
       const form = $('#place-form', d);
+      wirePeoplePicker(d);
       const statusSel = $('#pf-status', d);
       const updatePreview = mountPreview($('#pf-preview', d), parseFloat(p.lat), parseFloat(p.lon));
       const syncFromFields = () => updatePreview(parseFloat($('#pf-lat', d).value.replace(',', '.')), parseFloat($('#pf-lon', d).value.replace(',', '.')));
@@ -703,6 +708,7 @@ function placeForm(existing = null, preset = {}) {
         try {
           let id = existing?.id;
           let visitId = null;
+          const people = pickedPeople(d, 'pf-people');
           if (existing) {
             const { error } = await supabase.from('places').update(row).eq('id', id);
             if (error) throw error;
@@ -710,12 +716,18 @@ function placeForm(existing = null, preset = {}) {
             const { data: ins, error } = await supabase.from('places').insert(row).select('id').single();
             if (error) throw error;
             id = ins.id;
-            if (row.status === 'visited' && (date || trip_id || preset.onSaved)) {
-              const { data: vis, error: e2 } = await supabase.from('visits').insert({ place_id: id, visited_on: date || null, trip_id: trip_id || null }).select('id').single();
-              if (e2) throw e2;
-              visitId = vis.id;
-              await addPeopleToVisit(visitId, meIds());
-            }
+          }
+          if (lastVisit) {
+            visitId = lastVisit.id;
+            const { error: e2 } = await supabase.from('visits').update({ visited_on: date || null, trip_id: trip_id || null }).eq('id', visitId);
+            if (e2) throw e2;
+            await supabase.from('photos').update({ trip_id: trip_id || null }).eq('visit_id', visitId);
+            await setLinks('visit_people', 'visit_id', visitId, people);
+          } else if (row.status === 'visited' && (date || trip_id || people.length || preset.onSaved)) {
+            const { data: vis, error: e2 } = await supabase.from('visits').insert({ place_id: id, visited_on: date || null, trip_id: trip_id || null }).select('id').single();
+            if (e2) throw e2;
+            visitId = vis.id;
+            await setLinks('visit_people', 'visit_id', visitId, people);
           }
           if (preset.onSaved) await preset.onSaved(id, visitId, trip_id || null);
           closeDialog();
