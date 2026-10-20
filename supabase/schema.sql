@@ -1,0 +1,158 @@
+-- Turkart – databaseoppsett for Supabase
+-- Kjør hele filen i Supabase: SQL Editor → New query → lim inn → Run.
+-- Filen kan kjøres flere ganger uten å ødelegge noe.
+
+-- 1. Hvem som har tilgang ---------------------------------------------------
+create table if not exists public.allowed_users (
+  email text primary key
+);
+
+-- Bytt ut med deres to e-postadresser før du kjører:
+insert into public.allowed_users (email) values
+  ('admin1@example.com')
+on conflict do nothing;
+
+create or replace function public.is_member()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.allowed_users
+    where lower(email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+  );
+$$;
+
+-- 2. Reiser -----------------------------------------------------------------
+create table if not exists public.trips (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  start_date date,
+  end_date date,
+  countries text[] not null default '{}',
+  status text not null default 'done' check (status in ('done', 'wish')),
+  notes text,
+  created_by uuid default auth.uid(),
+  created_at timestamptz not null default now()
+);
+
+-- 3. Steder (topper, utsiktspunkter, byer, overnattinger …) -----------------
+create table if not exists public.places (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  mode text not null default 'fjell' check (mode in ('fjell', 'reise')),
+  kind text not null default 'topptur'
+    check (kind in ('topptur', 'skitur', 'toppskitur', 'fjelltur', 'sykkeltur', 'padletur', 'klatring', 'utsikt', 'hytte', 'sted', 'by', 'overnatting')),
+  status text not null default 'visited' check (status in ('visited', 'wish')),
+  lat double precision not null,
+  lon double precision not null,
+  elevation integer,
+  country text,
+  wish_season text,
+  wish_priority smallint check (wish_priority between 1 and 3),
+  notes text,
+  created_by uuid default auth.uid(),
+  created_at timestamptz not null default now()
+);
+
+-- 4. Besøk (ett sted kan besøkes flere ganger) ------------------------------
+create table if not exists public.visits (
+  id uuid primary key default gen_random_uuid(),
+  place_id uuid not null references public.places (id) on delete cascade,
+  trip_id uuid references public.trips (id) on delete set null,
+  visited_on date,
+  notes text,
+  distance_km numeric(6, 1),
+  ascent_m integer,
+  duration_min integer,
+  created_by uuid default auth.uid(),
+  created_at timestamptz not null default now()
+);
+
+-- 5. Bilder -----------------------------------------------------------------
+create table if not exists public.photos (
+  id uuid primary key default gen_random_uuid(),
+  storage_path text not null,
+  thumb_path text not null,
+  sha256 text not null unique,
+  original_name text,
+  taken_at timestamptz,
+  lat double precision,
+  lon double precision,
+  width integer,
+  height integer,
+  place_id uuid references public.places (id) on delete set null,
+  visit_id uuid references public.visits (id) on delete set null,
+  trip_id uuid references public.trips (id) on delete set null,
+  created_by uuid default auth.uid(),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists photos_place_idx on public.photos (place_id);
+create index if not exists photos_visit_idx on public.photos (visit_id);
+create index if not exists photos_taken_idx on public.photos (taken_at);
+create index if not exists visits_place_idx on public.visits (place_id);
+
+-- 6. Tilgangsregler: bare medlemmer leser og skriver ------------------------
+alter table public.allowed_users enable row level security;
+alter table public.trips enable row level security;
+alter table public.places enable row level security;
+alter table public.visits enable row level security;
+alter table public.photos enable row level security;
+
+do $$
+declare t text;
+begin
+  foreach t in array array['trips', 'places', 'visits', 'photos'] loop
+    execute format('drop policy if exists "members_all" on public.%I', t);
+    execute format(
+      'create policy "members_all" on public.%I for all to authenticated using (public.is_member()) with check (public.is_member())',
+      t
+    );
+  end loop;
+end $$;
+
+drop policy if exists "members_read" on public.allowed_users;
+create policy "members_read" on public.allowed_users
+  for select to authenticated using (public.is_member());
+
+-- 7. Bildelagring (privat bøtte) --------------------------------------------
+insert into storage.buckets (id, name, public)
+values ('photos', 'photos', false)
+on conflict (id) do update set public = false;
+
+drop policy if exists "photos_members_select" on storage.objects;
+drop policy if exists "photos_members_insert" on storage.objects;
+drop policy if exists "photos_members_update" on storage.objects;
+drop policy if exists "photos_members_delete" on storage.objects;
+
+create policy "photos_members_select" on storage.objects
+  for select to authenticated using (bucket_id = 'photos' and public.is_member());
+create policy "photos_members_insert" on storage.objects
+  for insert to authenticated with check (bucket_id = 'photos' and public.is_member());
+create policy "photos_members_update" on storage.objects
+  for update to authenticated using (bucket_id = 'photos' and public.is_member());
+create policy "photos_members_delete" on storage.objects
+  for delete to authenticated using (bucket_id = 'photos' and public.is_member());
+
+-- 8. Oppdater lovlige typer (kjøres på eksisterende database) -----------------
+alter table public.places drop constraint if exists places_kind_check;
+alter table public.places add constraint places_kind_check
+  check (kind in ('topptur', 'skitur', 'toppskitur', 'fjelltur', 'sykkeltur', 'padletur', 'klatring', 'utsikt', 'hytte', 'sted', 'by', 'overnatting'));
+
+-- 9. Notater og feedback ------------------------------------------------------
+create table if not exists public.notes (
+  id uuid primary key default gen_random_uuid(),
+  body text not null,
+  kind text not null default 'feedback' check (kind in ('feedback', 'ide', 'notat')),
+  context text,
+  done boolean not null default false,
+  author_email text default (auth.jwt() ->> 'email'),
+  created_at timestamptz not null default now()
+);
+alter table public.notes enable row level security;
+drop policy if exists "members_all" on public.notes;
+create policy "members_all" on public.notes for all to authenticated
+  using (public.is_member()) with check (public.is_member());

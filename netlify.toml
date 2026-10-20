@@ -1,0 +1,15 @@
+[build]
+  command = "npm ci && npm run build && cp public/icon.svg public/manifest.webmanifest dist/ 2>/dev/null || true"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+  # Offentlige verdier: Supabase-URL og publishable key er laget for å ligge i nettleseren.
+  # Tilgang styres av innlogging og Row Level Security i databasen.
+  VITE_SUPABASE_URL = "https://wucaivamwrnuvczrvios.supabase.co"
+  VITE_SUPABASE_ANON_KEY = "sb_publishable_R8cM1uORzNNqDNmFyD8U8A_L6hgfwWD"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
