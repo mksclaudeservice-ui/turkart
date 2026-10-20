@@ -1269,7 +1269,10 @@ function groupCard(g, i) {
     ${g.noPosition ? `<p class="warnbox">Bildene mangler posisjon. Søk opp stedet under, så lagres turen likevel. <span class="muted">Tips: På iPhone, trykk <b>Valg</b> øverst i bildevelgeren og slå på <b>Posisjon</b>.</span></p>` : ''}
     <label class="field"><span>Hva er dette?</span>
       <select class="g-choice" id="g${i}-choice">
-        ${g.nearby.length ? g.nearby.map((p, j) => `<option value="existing:${p.id}" ${j === 0 ? 'selected' : ''}>Besøk på ${esc(p.name)}</option>`).join('') : ''}
+        ${g.nearby.length ? g.nearby.map((p, j) => {
+          const same = g.start && (p.visitsList ?? []).some((v) => v.visited_on === isoDay(g.start));
+          return `<option value="existing:${p.id}" ${j === 0 ? 'selected' : ''}>Besøk på ${esc(p.name)}${same ? ' (samme dag)' : ''}</option>`;
+        }).join('') : ''}
         <option value="new" ${g.nearby.length ? '' : 'selected'}>Nytt sted</option>
         <option value="skip">Hopp over (legg i Usortert)</option>
       </select></label>

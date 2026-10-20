@@ -506,3 +506,4 @@ fieldset.visit-only { display: flex; flex-direction: column; gap: 10px; }
 .map-chip svg { color: var(--muted); }
 .map-chip[aria-pressed='true'] { border-color: #d1461f; }
 .map-chip[aria-pressed='true'] svg { color: #d1461f; }
+.gcard > .field, .gcard .g-new > .field { flex: 0 0 auto; }

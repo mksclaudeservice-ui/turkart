@@ -101,10 +101,12 @@ export async function suggestForGroups(groups, places) {
         .filter((x) => x.d <= 1 || distanceKm(g.center, x.p) <= MATCH_EXISTING_KM)
         .sort((a, b) => Number(b.sameDay) - Number(a.sameDay) || a.d - b.d);
     } else {
+      // Bilder: steder i nærheten, pluss steder med besøk samme dag innen 15 km (samme tur, annet punkt).
+      const day = g.start ? new Date(g.start.getTime() - g.start.getTimezoneOffset() * 60000).toISOString().slice(0, 10) : null;
       nearby = places
-        .map((p) => ({ p, d: distanceKm(g.center, p) }))
-        .filter((x) => x.d <= MATCH_EXISTING_KM)
-        .sort((a, b) => a.d - b.d);
+        .map((p) => ({ p, d: distanceKm(g.center, p), sameDay: Boolean(day) && (p.visitsList ?? []).some((v) => v.visited_on === day) }))
+        .filter((x) => x.d <= MATCH_EXISTING_KM || (x.sameDay && x.d <= 15))
+        .sort((a, b) => Number(b.sameDay) - Number(a.sameDay) || a.d - b.d);
     }
     g.nearby = nearby.map((x) => x.p);
     if (g.nearby.length) {
