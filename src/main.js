@@ -643,6 +643,7 @@ function placeForm(existing = null, preset = {}) {
           const z = await elevationFor(ll.lat, ll.lng);
           placeForm(existing, {
             ...snapshot,
+            onSaved: preset.onSaved,
             name: snapshot.name || guess.name,
             country: snapshot.country || guess.country,
             elevation: snapshot.elevation ?? z,
@@ -659,6 +660,7 @@ function placeForm(existing = null, preset = {}) {
         const { date, trip_id, ...row } = data;
         try {
           let id = existing?.id;
+          let visitId = null;
           if (existing) {
             const { error } = await supabase.from('places').update(row).eq('id', id);
             if (error) throw error;
@@ -666,11 +668,14 @@ function placeForm(existing = null, preset = {}) {
             const { data: ins, error } = await supabase.from('places').insert(row).select('id').single();
             if (error) throw error;
             id = ins.id;
-            if (row.status === 'visited' && (date || trip_id)) {
-              const { error: e2 } = await supabase.from('visits').insert({ place_id: id, visited_on: date || null, trip_id: trip_id || null });
+            if (row.status === 'visited' && (date || trip_id || preset.onSaved)) {
+              const { data: vis, error: e2 } = await supabase.from('visits').insert({ place_id: id, visited_on: date || null, trip_id: trip_id || null }).select('id').single();
               if (e2) throw e2;
+              visitId = vis.id;
+              await addPeopleToVisit(visitId, meIds());
             }
           }
+          if (preset.onSaved) await preset.onSaved(id, visitId, trip_id || null);
           closeDialog();
           await loadData();
           state.mode = row.mode;
@@ -776,8 +781,8 @@ function visitForm(place, existing = null) {
   );
 }
 
-function tripForm(existing = null) {
-  const t = existing ?? { status: 'done', countries: [] };
+function tripForm(existing = null, preset = {}) {
+  const t = existing ?? { status: 'done', countries: [], start_date: preset.start_date ?? null, end_date: preset.end_date ?? null };
   openDialog(
     `<form id="trip-form" class="form">
       <div class="dlg-head"><h2>${existing ? 'Rediger reise' : 'Ny reise'}</h2><button type="button" class="icon-btn" data-action="close-dlg" aria-label="Lukk">${ICON.close}</button></div>
@@ -816,6 +821,7 @@ function tripForm(existing = null) {
             id = data.id;
           }
           await setLinks('trip_people', 'trip_id', id, pickedPeople(d, 'tf-people'));
+          if (preset.onSaved) await preset.onSaved(id);
           closeDialog();
           await loadData();
           state.mode = 'reise';
@@ -1127,7 +1133,11 @@ function inbox() {
         .map((p) => `<label class="ithumb"><input type="checkbox" value="${p.id}" /><img alt="" data-thumb="${esc(p.thumb_path)}" /><span>${p.taken_at ? fmtDate(p.taken_at) : 'Uten dato'}</span></label>`)
         .join('')}</div>
       <div class="field-row">
-        <label class="field"><span>Koble valgte til</span><select id="ib-target">${placeOpts}${tripOpts}</select></label>
+        <label class="field"><span>Koble valgte til</span><select id="ib-target">
+          <optgroup label="Opprett ny"><option value="new:place">+ Ny tur …</option><option value="new:trip">+ Ny reise …</option></optgroup>
+          ${placeOpts ? `<optgroup label="Turer og steder">${placeOpts}</optgroup>` : ''}
+          ${tripOpts ? `<optgroup label="Reiser">${tripOpts}</optgroup>` : ''}
+        </select></label>
         <button type="button" class="btn btn--dark btn--self" id="ib-apply">Koble til</button>
         <button type="button" class="btn btn--danger btn--self" id="ib-delete">Slett valgte</button>
       </div>` : emptyState('Alt er sortert', 'Bilder uten posisjon havner her etter opplasting.')}
@@ -1139,6 +1149,7 @@ function inbox() {
         const target = $('#ib-target', d).value;
         if (!ids.length || !target) return toast('Velg minst ett bilde og et mål.', 'err');
         const [type, id] = target.split(':');
+        if (type === 'new') return newFromInbox(id, ids);
         let patch;
         if (type === 'p') {
           const visit = state.visits.find((v) => v.place_id === id);
@@ -1161,6 +1172,51 @@ function inbox() {
       });
     }
   );
+}
+
+/** Opprett ny tur eller reise fra valgte bilder i Usortert, og koble bildene til den. */
+async function newFromInbox(kind, ids) {
+  const sel = state.photos.filter((p) => ids.includes(p.id));
+  const days = sel.map((p) => p.taken_at && isoDay(new Date(p.taken_at))).filter(Boolean).sort();
+  const pos = sel.find((p) => p.lat != null && p.lon != null);
+  const after = async (msg) => {
+    await loadData();
+    render();
+    toast(msg);
+  };
+  if (kind === 'trip') {
+    return tripForm(null, {
+      start_date: days[0] ?? null,
+      end_date: days[days.length - 1] ?? null,
+      onSaved: async (tripId) => {
+        const { error } = await supabase.from('photos').update({ trip_id: tripId }).in('id', ids);
+        if (error) throw error;
+        setTimeout(() => after(`${ids.length} bilder koblet til reisen`), 0);
+      }
+    });
+  }
+  const preset = {
+    date: days[0] ?? '',
+    onSaved: async (placeId, visitId, tripId) => {
+      const { error } = await supabase.from('photos').update({ place_id: placeId, visit_id: visitId, trip_id: tripId }).in('id', ids);
+      if (error) throw error;
+      setTimeout(() => after(`${ids.length} bilder koblet til turen`), 0);
+    }
+  };
+  if (pos) {
+    toast('Finner sted ut fra bildene …');
+    const [guess, z] = await Promise.all([nameForPoint(pos.lat, pos.lon), elevationFor(pos.lat, pos.lon)]);
+    Object.assign(preset, {
+      lat: Number(pos.lat.toFixed(5)),
+      lon: Number(pos.lon.toFixed(5)),
+      name: guess.name,
+      country: guess.country,
+      elevation: z,
+      kind: guess.isPeak ? 'topptur' : 'fjelltur',
+      mode: guess.country && guess.country !== 'Norge' ? 'reise' : 'fjell'
+    });
+  }
+  placeForm(null, preset);
 }
 
 /** Slett bilder: filer i lagringen og raden i databasen. */
