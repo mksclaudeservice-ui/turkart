@@ -204,3 +204,24 @@ update public.people set emails = array['medlem@example.com']
 -- 12. Midtpunkt for bildeutsnitt (prosent, null = midten) ------------------------
 alter table public.photos add column if not exists focus_x real;
 alter table public.photos add column if not exists focus_y real;
+
+-- 13. GPS-spor fra treningsklokke ------------------------------------------------
+create table if not exists public.tracks (
+  id uuid primary key default gen_random_uuid(),
+  visit_id uuid not null references public.visits (id) on delete cascade,
+  source text,
+  original_name text,
+  started_at timestamptz,
+  duration_min integer,
+  distance_km numeric(7, 2),
+  ascent_m integer,
+  max_ele integer,
+  points jsonb not null,
+  created_by uuid default auth.uid(),
+  created_at timestamptz not null default now()
+);
+create index if not exists tracks_visit_idx on public.tracks (visit_id);
+alter table public.tracks enable row level security;
+drop policy if exists "members_all" on public.tracks;
+create policy "members_all" on public.tracks for all to authenticated
+  using (public.is_member()) with check (public.is_member());

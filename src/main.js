@@ -1,6 +1,7 @@
 import './style.css';
 import { supabase, configured, signedUrls, BUCKET } from './supabase.js';
-import { TurMap, miniMap, miniMapPoints } from './map.js';
+import { TurMap, miniMap, miniMapPoints, miniMapTrack, drawLines } from './map.js';
+import { isTrackFile, parseTrackFile, positionAt, withinTrack, profileSvg } from './tracks.js';
 import { searchPlaces, elevationFor, nameForPoint } from './geo.js';
 import { isImageFile, processFile, existingHashes, uploadAll, squareJpeg } from './upload.js';
 import { clusterPhotos, suggestForGroups } from './grouping.js';
@@ -59,6 +60,7 @@ const ICON = {
   list: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>',
   chevronLeft: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>',
   pin: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>',
+  route: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h7a3.5 3.5 0 0 0 0-7H9a3.5 3.5 0 0 1 0-7h7"/></svg>',
   trash: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>',
   close: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>'
 };
@@ -76,6 +78,8 @@ const state = {
   notesFilter: 'open',
   people: [],
   visitPeople: [],
+  tracks: [],
+  trackPoints: new Map(),
   tripPeople: [],
   selected: null, // {type:'place'|'trip', id}
   picking: null,
@@ -93,14 +97,15 @@ function toast(msg, kind = 'ok') {
 
 // ---------- data ----------
 async function loadData() {
-  const [p, v, t, ph, pe, vp, tp] = await Promise.all([
+  const [p, v, t, ph, pe, vp, tp, tr] = await Promise.all([
     supabase.from('places').select('*').order('created_at'),
     supabase.from('visits').select('*').order('visited_on', { ascending: false }),
     supabase.from('trips').select('*').order('start_date', { ascending: false }),
     supabase.from('photos').select('id,thumb_path,storage_path,place_id,visit_id,trip_id,taken_at,lat,lon,created_at,focus_x,focus_y').order('taken_at'),
     supabase.from('people').select('*').order('created_at'),
     supabase.from('visit_people').select('*'),
-    supabase.from('trip_people').select('*')
+    supabase.from('trip_people').select('*'),
+    supabase.from('tracks').select('id,visit_id,source,original_name,started_at,duration_min,distance_km,ascent_m,max_ele')
   ]);
   for (const r of [p, v, t, ph]) if (r.error) throw r.error;
   state.places = p.data;
@@ -110,6 +115,7 @@ async function loadData() {
   state.people = pe.data ?? [];
   state.visitPeople = vp.data ?? [];
   state.tripPeople = tp.data ?? [];
+  state.tracks = tr.data ?? [];
   derive();
   await loadNotes();
 }
@@ -127,8 +133,69 @@ function derive() {
   for (const v of state.visits) byPlace.get(v.place_id)?.visitsList.push(v);
   for (const ph of state.photos) if (ph.place_id) byPlace.get(ph.place_id)?.photoList.push(ph);
   for (const pl of state.places) pl.lastVisit = pl.visitsList.find((v) => v.visited_on)?.visited_on ?? null;
-  for (const v of state.visits) v.people = state.visitPeople.filter((x) => x.visit_id === v.id).map((x) => x.person_id);
+  for (const v of state.visits) {
+    v.people = state.visitPeople.filter((x) => x.visit_id === v.id).map((x) => x.person_id);
+    v.tracks = state.tracks.filter((x) => x.visit_id === v.id);
+  }
   for (const t of state.trips) t.people = state.tripPeople.filter((x) => x.trip_id === t.id).map((x) => x.person_id);
+}
+
+// ---------- spor ----------
+const fmtDuration = (min) => (min == null ? '' : min >= 60 ? `${Math.floor(min / 60)} t ${min % 60} min` : `${min} min`);
+const fmtKm = (km) => (km == null ? '' : `${Number(km).toLocaleString('nb-NO', { maximumFractionDigits: 1 })} km`);
+const SPORT_KIND = {
+  crossCountrySkiing: 'skitur', alpineSkiing: 'toppskitur', snowshoeing: 'fjelltur', cycling: 'sykkeltur', eBiking: 'sykkeltur',
+  paddling: 'padletur', kayaking: 'padletur', standUpPaddleboarding: 'padletur', rowing: 'padletur', rockClimbing: 'klatring',
+  hiking: 'topptur', mountaineering: 'topptur', walking: 'fjelltur', running: 'fjelltur'
+};
+const sportKind = (sport) => (sport ? SPORT_KIND[sport] ?? SPORT_KIND[String(sport).replace(/_([a-z])/g, (_, c) => c.toUpperCase())] ?? null : null);
+async function trackPointsFor(ids) {
+  const missing = ids.filter((id) => !state.trackPoints.has(id));
+  if (missing.length) {
+    const { data, error } = await supabase.from('tracks').select('id,points').in('id', missing);
+    if (error) throw error;
+    for (const r of data) state.trackPoints.set(r.id, r.points);
+  }
+  return ids.map((id) => state.trackPoints.get(id)).filter(Boolean);
+}
+function trackBlock(tr) {
+  const stats = [fmtKm(tr.distance_km), tr.ascent_m != null ? `${num(tr.ascent_m)} hm` : '', fmtDuration(tr.duration_min), tr.max_ele != null ? `topp ${num(tr.max_ele)} moh.` : ''].filter(Boolean).join(' · ');
+  return `<div class="trk"><div class="trk-head">${ICON.route}<span>${stats || 'Spor'}</span></div><div class="trk-profile" data-track-profile="${tr.id}"></div></div>`;
+}
+/** Koble bilder i Usortert som er tatt mens sporet pågikk. Returnerer antall. */
+async function adoptUnsortedForTrack(track, visit, place) {
+  const cand = state.photos.filter((ph) => !ph.place_id && !ph.trip_id && ph.taken_at && withinTrack(track, new Date(ph.taken_at)));
+  for (const ph of cand) {
+    const patch = { place_id: place.id, visit_id: visit.id, trip_id: visit.trip_id ?? null };
+    if (ph.lat == null) {
+      const pos = positionAt(track, new Date(ph.taken_at));
+      if (pos) Object.assign(patch, { lat: pos.lat, lon: pos.lon });
+    }
+    await supabase.from('photos').update(patch).eq('id', ph.id);
+  }
+  return cand.length;
+}
+async function insertTrack(visitId, tr) {
+  const dup = state.tracks.find((x) => x.started_at && tr.start && new Date(x.started_at).getTime() === tr.start.getTime());
+  if (dup) return dup.id;
+  const { data, error } = await supabase
+    .from('tracks')
+    .insert({
+      visit_id: visitId,
+      source: tr.source,
+      original_name: tr.name,
+      started_at: tr.start?.toISOString() ?? null,
+      duration_min: tr.durationMin,
+      distance_km: tr.distanceKm,
+      ascent_m: tr.ascentM,
+      max_ele: tr.maxEle,
+      points: tr.points
+    })
+    .select('id')
+    .single();
+  if (error) throw error;
+  state.trackPoints.set(data.id, tr.points);
+  return data.id;
 }
 
 // ---------- hovedbilder ----------
@@ -475,10 +542,33 @@ function select(type, id) {
   }
 }
 
+async function showDetailTracks(sel, detailMap) {
+  const visits =
+    sel.type === 'place'
+      ? state.visits.filter((v) => v.place_id === sel.id)
+      : state.visits.filter((v) => v.trip_id === sel.id);
+  const ids = visits.flatMap((v) => (v.tracks ?? []).map((t) => t.id));
+  if (!ids.length) return state.map.clearTracks();
+  try {
+    await trackPointsFor(ids);
+  } catch (err) {
+    return console.warn(err);
+  }
+  if (state.selected?.id !== sel.id) return;
+  const lines = ids.map((id) => state.trackPoints.get(id)).filter(Boolean);
+  state.map.showTracks(lines, { fit: sel.type === 'place' && !isMobile() });
+  if (detailMap) drawLines(detailMap, lines, { weight: 3, fit: true });
+  document.querySelectorAll('[data-track-profile]').forEach((el) => {
+    const pts = state.trackPoints.get(el.dataset.trackProfile);
+    if (pts) el.innerHTML = profileSvg(pts);
+  });
+}
+
 function renderDetail() {
   const el = $('#detail');
   const sel = state.selected;
   if (!sel) {
+    state.map.clearTracks();
     el.hidden = true;
     hydrateThumbs();
     return;
@@ -488,15 +578,17 @@ function renderDetail() {
   el.scrollTop = 0;
   hydrateThumbs();
   const mapEl = $('#detail-map', el);
+  let detailMap = null;
   if (mapEl && isMobile()) {
     if (sel.type === 'place') {
       const p = state.places.find((x) => x.id === sel.id);
-      if (p) miniMapPoints(mapEl, [{ lat: p.lat, lon: p.lon, color: p.mode === 'reise' ? '#2B5C8A' : '#2F5D50' }], { maxZoom: 12 });
+      if (p) detailMap = miniMapPoints(mapEl, [{ lat: p.lat, lon: p.lon, color: p.mode === 'reise' ? '#2B5C8A' : '#2F5D50' }], { maxZoom: 12 });
     } else {
       const t = state.trips.find((x) => x.id === sel.id);
-      if (t) miniMapPoints(mapEl, tripStops(t).map((p) => ({ lat: p.lat, lon: p.lon, color: p.mode === 'reise' ? '#2B5C8A' : '#2F5D50' })), { maxZoom: 11 });
+      if (t) detailMap = miniMapPoints(mapEl, tripStops(t).map((p) => ({ lat: p.lat, lon: p.lon, color: p.mode === 'reise' ? '#2B5C8A' : '#2F5D50' })), { maxZoom: 11 });
     }
   }
+  showDetailTracks(sel, detailMap);
 }
 
 function photoGrid(photos) {
@@ -548,6 +640,7 @@ function placeDetail(p) {
           return `<li><div class="visit-head"><b>${v.visited_on ? fmtDate(v.visited_on) : 'Uten dato'}</b>
           <button type="button" class="btn btn--link btn--xs" data-action="edit-visit" data-id="${v.id}">Endre besøk</button></div>
           ${[v.distance_km ? `${num(v.distance_km)} km` : '', v.ascent_m ? `${num(v.ascent_m)} hm` : '', v.duration_min ? `${Math.floor(v.duration_min / 60)} t ${v.duration_min % 60} min` : ''].filter(Boolean).join(' · ')}
+          ${(v.tracks ?? []).map(trackBlock).join('')}
           ${v.people?.length ? peopleRow(v.people) : `<button type="button" class="add-people" data-action="edit-visit" data-id="${v.id}">${ICON.users}Legg til hvem som var med</button>`}
           ${trip ? `<button type="button" class="trip-pill" data-action="select-trip" data-id="${trip.id}">${ICON.plane}${esc(trip.title)}</button>` : ''}
           ${v.notes ? `<p>${esc(v.notes)}</p>` : ''}</li>`;
@@ -779,6 +872,10 @@ function visitForm(place, existing = null) {
         <label class="field"><span>Høydemeter</span><input id="vf-hm" type="number" inputmode="numeric" value="${v0.ascent_m ?? ''}" /></label>
         <label class="field"><span>Tid (minutter)</span><input id="vf-min" type="number" inputmode="numeric" value="${v0.duration_min ?? ''}" /></label>
       </div>
+      ${existing ? `<fieldset class="vf-tracks"><legend>Spor fra klokka</legend>
+        ${(v0.tracks ?? []).map((t) => `<div class="vf-track">${ICON.route}<span>${esc(t.original_name ?? 'Spor')} · ${[fmtKm(t.distance_km), t.ascent_m != null ? `${num(t.ascent_m)} hm` : ''].filter(Boolean).join(' · ')}</span><button type="button" class="icon-btn icon-btn--sm" data-del-track="${t.id}" aria-label="Fjern spor">${ICON.trash}</button></div>`).join('')}
+        <label class="btn btn--ghost btn--file btn--sm">${ICON.upload}<span class="vf-track-label">Legg til spor (GPX, FIT, TCX)</span><input type="file" accept=".gpx,.fit,.tcx" id="vf-track" /></label>
+      </fieldset>` : ''}
       <label class="field"><span>Notat</span><textarea id="vf-notes" rows="3">${esc(v0.notes ?? '')}</textarea></label>
       <div class="dlg-actions">
         ${existing ? '<button type="button" class="btn btn--danger" id="vf-delete">Slett besøk</button><span class="spacer"></span>' : ''}
@@ -787,6 +884,45 @@ function visitForm(place, existing = null) {
     </form>`,
     (d) => {
       wirePeoplePicker(d);
+      d.querySelectorAll('[data-del-track]').forEach((b) =>
+        b.addEventListener('click', async () => {
+          const { error } = await supabase.from('tracks').delete().eq('id', b.dataset.delTrack);
+          if (error) return toast(error.message, 'err');
+          state.trackPoints.delete(b.dataset.delTrack);
+          b.closest('.vf-track').remove();
+          await loadData();
+          render();
+          toast('Sporet er fjernet');
+        })
+      );
+      $('#vf-track', d)?.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const label = $('.vf-track-label', d);
+        label.textContent = 'Leser spor …';
+        try {
+          const tr = await parseTrackFile(file);
+          await insertTrack(existing.id, tr);
+          // Fyll inn tomme felt fra sporet, så de lagres med besøket.
+          const fill = (sel, val) => {
+            const el = $(sel, d);
+            if (el && !el.value && val != null) el.value = String(val).replace('.', ',');
+          };
+          fill('#vf-km', tr.distanceKm);
+          fill('#vf-hm', tr.ascentM);
+          fill('#vf-min', tr.durationMin);
+          if (!$('#vf-date', d).value && tr.start) $('#vf-date', d).value = isoDay(tr.start);
+          const adopted = await adoptUnsortedForTrack(tr, existing, place);
+          await loadData();
+          render();
+          label.textContent = 'Legg til spor (GPX, FIT, TCX)';
+          $('.vf-tracks', d).insertAdjacentHTML('afterbegin', `<div class="vf-track">${ICON.route}<span>${esc(tr.name)} · ${fmtKm(tr.distanceKm)}${tr.ascentM != null ? ` · ${num(tr.ascentM)} hm` : ''}</span></div>`);
+          toast(adopted ? `Spor lagt til, og ${adopted} bilder fra Usortert koblet til` : 'Spor lagt til');
+        } catch (err) {
+          label.textContent = 'Legg til spor (GPX, FIT, TCX)';
+          toast(`Kunne ikke lese sporet: ${err.message}`, 'err');
+        }
+      });
       $('#vf-delete', d)?.addEventListener('click', () =>
         confirmDialog('Besøket slettes. Bildene beholdes på stedet.', async () => {
           await supabase.from('photos').update({ visit_id: null }).eq('visit_id', existing.id);
@@ -904,19 +1040,26 @@ function confirmDialog(text, onYes) {
 function uploadWizard() {
   openDialog(
     `<div class="form upl">
-      <div class="dlg-head"><h2>Last opp bilder</h2><button type="button" class="icon-btn" data-action="close-dlg" aria-label="Lukk">${ICON.close}</button></div>
+      <div class="dlg-head"><h2>Last opp bilder og spor</h2><button type="button" class="icon-btn" data-action="close-dlg" aria-label="Lukk">${ICON.close}</button></div>
       <div id="upl-body">
         <label class="drop" id="drop">
-          <input type="file" id="upl-files" multiple accept="image/*,.heic,.heif" />
-          <b>Dra bilder eller en hel mappe hit</b>
-          <span>eller trykk for å velge. JPEG, PNG og iPhone-bilder (HEIC).</span>
+          <input type="file" id="upl-files" multiple accept="image/*,.heic,.heif,.gpx,.fit,.tcx" />
+          <b>Dra bilder, spor eller en hel mappe hit</b>
+          <span>eller trykk for å velge. Bilder (JPEG, PNG, HEIC) og spor fra treningsklokka (GPX, FIT, TCX).</span>
         </label>
         <p class="hint">På iPhone: trykk <b>Valg</b> øverst i bildevelgeren og slå på <b>Posisjon</b>, ellers mangler bildene plassering.</p>
+        <details class="hint howto"><summary>Hvordan får jeg spor fra klokka?</summary>
+          <ul>
+            <li><b>Garmin:</b> åpne økten i Garmin Connect → tannhjulet → <i>Eksporter til GPX</i> (eller <i>Eksporter original</i> for FIT).</li>
+            <li><b>Apple Watch:</b> bruk appen <i>HealthFit</i> eller <i>RunGap</i> på iPhone og eksporter økten som GPX.</li>
+            <li><b>Strava:</b> åpne økten → ⋯ → <i>Eksporter GPX</i>.</li>
+          </ul>
+          Bilder tatt under økten kobles til turen automatisk, også de som ligger i Usortert.</details>
         <label class="btn btn--ghost btn--file">Velg mappe<input type="file" id="upl-dir" webkitdirectory multiple /></label>
       </div>
     </div>`,
     (d) => {
-      const go = (files) => runUpload([...files].filter(isImageFile), d);
+      const go = (files) => runUpload([...files].filter((f) => isImageFile(f) || isTrackFile(f)), d);
       $('#upl-files', d).addEventListener('change', (e) => go(e.target.files));
       $('#upl-dir', d).addEventListener('change', (e) => go(e.target.files));
       const drop = $('#drop', d);
@@ -952,13 +1095,27 @@ async function filesFromDrop(dt) {
 
 async function runUpload(files, d) {
   const body = $('#upl-body', d);
-  if (!files.length) return toast('Fant ingen bilder i utvalget.', 'err');
+  if (!files.length) return toast('Fant ingen bilder eller spor i utvalget.', 'err');
+  const trackFiles = files.filter(isTrackFile);
+  files = files.filter((f) => !isTrackFile(f));
   const progress = (label, done, total) => {
     body.innerHTML = `<p><b>${label}</b> ${done} av ${total}</p><progress max="${total}" value="${done}"></progress><div class="strip" id="strip"></div>`;
   };
+  // 0. Les spor
+  const tracks = [];
+  let failed = 0;
+  for (let i = 0; i < trackFiles.length; i++) {
+    progress('Leser spor …', i, trackFiles.length);
+    try {
+      tracks.push(await parseTrackFile(trackFiles[i]));
+    } catch (err) {
+      console.warn(trackFiles[i].name, err);
+      toast(`${trackFiles[i].name}: ${err.message}`, 'err');
+      failed++;
+    }
+  }
   // 1. Les og forbered
   const items = [];
-  let failed = 0;
   progress('Leser bilder …', 0, files.length);
   for (let i = 0; i < files.length; i++) {
     try {
@@ -968,6 +1125,13 @@ async function runUpload(files, d) {
       failed++;
     }
     progress('Leser bilder …', i + 1, files.length);
+  }
+  // Bilder uten GPS, men tatt under en økt, får posisjon fra sporet.
+  for (const it of items) {
+    if (it.lat != null || !it.takenAt) continue;
+    const tr = tracks.find((t) => withinTrack(t, it.takenAt));
+    const pos = tr && positionAt(tr, it.takenAt);
+    if (pos) Object.assign(it, { lat: pos.lat, lon: pos.lon, interp: true });
   }
   // 2. Duplikater
   const seen = new Set();
@@ -981,15 +1145,37 @@ async function runUpload(files, d) {
   const ok = fresh.filter((i) => i.id);
   const errors = fresh.length - ok.length + failed;
   const noPos = ok.filter((i) => i.lat == null).length;
-  // 4. Grupper
+  // 4. Grupper: først én gruppe per spor (med bilder tatt under økten), så resten etter tid og sted.
   body.innerHTML = '<p><b>Lager forslag …</b> Finner stedsnavn for gruppene.</p><progress></progress>';
-  const { groups, unsorted } = clusterPhotos(ok);
+  let rest = ok;
+  const trackGroups = tracks.map((tr) => {
+    const mine = rest.filter((it) => it.takenAt && withinTrack(tr, it.takenAt));
+    rest = rest.filter((it) => !mine.includes(it));
+    const old = state.photos
+      .filter((ph) => !ph.place_id && !ph.trip_id && ph.taken_at && withinTrack(tr, new Date(ph.taken_at)))
+      .map((ph) => ({ id: ph.id, thumb_path: ph.thumb_path, takenAt: new Date(ph.taken_at), lat: ph.lat, lon: ph.lon, existing: true }));
+    for (const it of old) {
+      if (it.lat == null) {
+        const pos = positionAt(tr, it.takenAt);
+        if (pos) Object.assign(it, { lat: pos.lat, lon: pos.lon, interp: true });
+      }
+    }
+    return { track: tr, items: [...mine, ...old], center: tr.summit, start: tr.start, end: tr.end };
+  });
+  const clustered = clusterPhotos(rest);
+  const groups = [...trackGroups, ...clustered.groups];
+  const unsorted = clustered.unsorted;
   await suggestForGroups(groups, state.places);
+  for (const g of trackGroups) {
+    const k = sportKind(g.track.sport);
+    if (k && g.suggestion) g.suggestion.kind = k;
+  }
   await loadData();
   render();
   body.innerHTML = `
     <div class="summary">
-      <span><b>${ok.length}</b> lastet opp</span>
+      <span><b>${ok.length}</b> bilder lastet opp</span>
+      ${tracks.length ? `<span><b>${tracks.length}</b> spor lest inn</span>` : ''}
       ${skipped ? `<span><b>${skipped}</b> fantes fra før</span>` : ''}
       ${errors ? `<span class="warn"><b>${errors}</b> feilet</span>` : ''}
       ${noPos ? `<span class="warn"><b>${noPos}</b> uten posisjon</span>` : ''}
@@ -1007,7 +1193,16 @@ async function runUpload(files, d) {
       $('.g-newtrip', card).hidden = sel.value !== '__new';
     })
   );
-  const previews = groups.map((g, i) => mountPreview($(`#g${i}-preview`, d), g.center?.lat, g.center?.lon));
+  hydrateThumbs(body);
+  const previews = groups.map((g, i) => {
+    if (g.track) {
+      const el = $(`#g${i}-preview`, d);
+      el.innerHTML = '<div class="minimap"></div>';
+      miniMapTrack($('.minimap', el), g.track.points);
+      return () => {};
+    }
+    return mountPreview($(`#g${i}-preview`, d), g.center?.lat, g.center?.lon);
+  });
   groups.forEach((g, i) => {
     const input = $(`#g${i}-search`, d);
     if (!input) return;
@@ -1039,10 +1234,12 @@ function groupCard(g, i) {
   const date = g.start ? fmtRange(isoDay(g.start), isoDay(g.end)) : 'Ukjent dato';
   const s = g.suggestion ?? { name: 'Ukjent sted' };
   const mode = s.country && s.country !== 'Norge' ? 'reise' : 'fjell';
-  const kind = mode === 'fjell' ? (s.isPeak ? 'topptur' : 'fjelltur') : 'sted';
-  return `<div class="gcard" data-i="${i}" data-choice="${g.nearby.length ? 'existing' : 'new'}">
-    <div class="gstrip">${g.items.slice(0, 6).map((it) => `<img alt="" src="${it.thumbUrl}" />`).join('')}${g.items.length > 6 ? `<span>+${g.items.length - 6}</span>` : ''}</div>
-    <p class="gmeta"><b>${g.items.length} bilder</b> · ${date}</p>
+  const kind = s.kind ?? (mode === 'fjell' ? (s.isPeak ? 'topptur' : 'fjelltur') : 'sted');
+  const tr = g.track;
+  return `<div class="gcard ${tr ? 'gcard--track' : ''}" data-i="${i}" data-choice="${g.nearby.length ? 'existing' : 'new'}">
+    ${g.items.length ? `<div class="gstrip">${g.items.slice(0, 6).map((it) => (it.thumbUrl ? `<img alt="" src="${it.thumbUrl}" />` : `<img alt="" data-thumb="${esc(it.thumb_path)}" />`)).join('')}${g.items.length > 6 ? `<span>+${g.items.length - 6}</span>` : ''}</div>` : ''}
+    <p class="gmeta">${tr ? `${ICON.route}<b>Spor</b> · ` : ''}<b>${g.items.length} bilder</b> · ${date}</p>
+    ${tr ? `<p class="gtrack-stats">${[fmtKm(tr.distanceKm), tr.ascentM != null ? `${num(tr.ascentM)} hm` : '', fmtDuration(tr.durationMin), tr.maxEle != null ? `topp ${num(tr.maxEle)} moh.` : ''].filter(Boolean).join(' · ')}${g.items.some((it) => it.existing) ? ` · ${g.items.filter((it) => it.existing).length} fra Usortert` : ''}</p>` : ''}
     ${g.noPosition ? `<p class="warnbox">Bildene mangler posisjon. Søk opp stedet under, så lagres turen likevel. <span class="muted">Tips: På iPhone, trykk <b>Valg</b> øverst i bildevelgeren og slå på <b>Posisjon</b>.</span></p>` : ''}
     <label class="field"><span>Hva er dette?</span>
       <select class="g-choice" id="g${i}-choice">
@@ -1126,7 +1323,7 @@ async function saveGroups(groups, d) {
           btn.textContent = 'Lagre turer';
           return;
         }
-        const elevation = g.suggestion?.country === 'Norge' ? await elevationFor(lat, lon) : null;
+        const elevation = (g.suggestion?.country === 'Norge' ? await elevationFor(lat, lon) : null) ?? g.track?.maxEle ?? null;
         const { data, error } = await supabase
           .from('places')
           .insert({
@@ -1154,9 +1351,23 @@ async function saveGroups(groups, d) {
         await addPeopleToVisit(data.id, meIds());
       }
       await supabase.from('places').update({ status: 'visited' }).eq('id', placeId).eq('status', 'wish');
-      const ids = g.items.map((it) => it.id);
-      const { error } = await supabase.from('photos').update({ place_id: placeId, visit_id: visit.id, trip_id: tripId }).in('id', ids);
-      if (error) throw error;
+      const ids = g.items.map((it) => it.id).filter(Boolean);
+      if (ids.length) {
+        const { error } = await supabase.from('photos').update({ place_id: placeId, visit_id: visit.id, trip_id: tripId }).in('id', ids);
+        if (error) throw error;
+      }
+      for (const it of g.items.filter((x) => x.existing && x.interp)) {
+        await supabase.from('photos').update({ lat: it.lat, lon: it.lon }).eq('id', it.id);
+      }
+      if (g.track) {
+        const tr = g.track;
+        const patch = {};
+        if (visit.distance_km == null && tr.distanceKm) patch.distance_km = tr.distanceKm;
+        if (visit.ascent_m == null && tr.ascentM != null) patch.ascent_m = tr.ascentM;
+        if (visit.duration_min == null && tr.durationMin != null) patch.duration_min = tr.durationMin;
+        if (Object.keys(patch).length) await supabase.from('visits').update(patch).eq('id', visit.id);
+        await insertTrack(visit.id, tr);
+      }
       saved++;
     }
     closeDialog();

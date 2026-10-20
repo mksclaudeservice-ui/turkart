@@ -472,3 +472,26 @@ fieldset.visit-only { display: flex; flex-direction: column; gap: 10px; }
 .fprev--sq { width: 64px; height: 64px; }
 .fprev--pin { width: 46px; height: 46px; border-radius: 50%; border: 3px solid #2f5d50; }
 .fprev--reise { border-color: #2b5c8a; }
+
+/* Spor */
+.trk { margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); }
+.trk-head { display: flex; align-items: center; gap: 6px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.trk-head svg { color: #d1461f; flex-shrink: 0; }
+.trk-profile:empty { display: none; }
+.trk-profile { margin-top: 6px; }
+.profile { display: block; width: 100%; height: 64px; }
+.profile-area { fill: color-mix(in srgb, #d1461f 18%, transparent); }
+.profile-line { stroke: #d1461f; stroke-width: 2; }
+.profile-top { fill: #d1461f; stroke: var(--surface); stroke-width: 1.5; }
+.profile-legend { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.gmeta { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.gmeta svg { color: #d1461f; }
+.gtrack-stats { margin: 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.gcard--track { border-color: color-mix(in srgb, #d1461f 40%, var(--line)); }
+.vf-tracks { display: flex; flex-direction: column; gap: 8px; }
+.vf-track { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.vf-track svg { color: #d1461f; flex-shrink: 0; }
+.vf-track span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.vf-tracks .btn--file { align-self: flex-start; }
+.howto summary { cursor: pointer; font-weight: 600; color: var(--ink); }
+.howto ul { margin: 6px 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }

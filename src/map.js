@@ -86,6 +86,39 @@ export function miniMapPoints(el, points, { color = '#2F5D50', maxZoom = 12 } = 
   return map;
 }
 
+/** Tegn ett eller flere spor på et Leaflet-kart. Returnerer laget. */
+export function drawLines(map, lines, { color = '#d1461f', weight = 4, fit = false } = {}) {
+  const group = L.layerGroup().addTo(map);
+  const all = [];
+  for (const pts of lines) {
+    const ll = pts.map((p) => [p[0], p[1]]);
+    if (ll.length < 2) continue;
+    L.polyline(ll, { color: '#fff', weight: weight + 3, opacity: 0.85, interactive: false }).addTo(group);
+    L.polyline(ll, { color, weight, opacity: 0.95, interactive: false }).addTo(group);
+    all.push(...ll);
+  }
+  if (fit && all.length) map.fitBounds(L.latLngBounds(all).pad(0.15), { maxZoom: 14 });
+  return group;
+}
+
+/** Lite, statisk kart som viser et spor. */
+export function miniMapTrack(el, points, { color = '#d1461f' } = {}) {
+  const map = L.map(el, {
+    zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false,
+    doubleClickZoom: false, boxZoom: false, keyboard: false, touchZoom: false, tap: false
+  });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, opacity: 0.6 }).addTo(map);
+  L.tileLayer('https://cache.kartverket.no/v1/wmts/1.0.0/topo/default/webmercator/{z}/{y}/{x}.png', { maxZoom: 18 }).addTo(map);
+  const fit = () => {
+    map.invalidateSize();
+    map.fitBounds(L.latLngBounds(points.map((p) => [p[0], p[1]])).pad(0.15), { maxZoom: 14 });
+  };
+  drawLines(map, [points], { color, weight: 3 });
+  fit();
+  setTimeout(fit, 60);
+  return map;
+}
+
 export class TurMap {
   constructor(el, { onPlaceClick, onMapClick }) {
     this.map = L.map(el, { zoomControl: false, worldCopyJump: true }).setView([64.5, 12], 5);
@@ -105,6 +138,7 @@ export class TurMap {
     this.map.on('baselayerchange', (e) => { this.userPickedLayer = true; this.current = e.layer; this.backdrop.setOpacity(e.layer === this.layers.osm ? 0 : 0.6); });
     this.markers = L.layerGroup().addTo(this.map);
     this.routes = L.layerGroup().addTo(this.map);
+    this.tracks = null;
     this.onPlaceClick = onPlaceClick;
     this.map.on('click', (e) => onMapClick?.(e.latlng));
   }
@@ -144,6 +178,16 @@ export class TurMap {
         .on('click', () => this.onPlaceClick?.(p))
         .addTo(this.markers);
     }
+  }
+
+  showTracks(lines, { fit = false } = {}) {
+    this.clearTracks();
+    if (lines.length) this.tracks = drawLines(this.map, lines, { fit });
+  }
+
+  clearTracks() {
+    if (this.tracks) this.map.removeLayer(this.tracks);
+    this.tracks = null;
   }
 
   fitTo(places) {
