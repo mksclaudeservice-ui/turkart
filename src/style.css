@@ -509,3 +509,12 @@ fieldset.visit-only { display: flex; flex-direction: column; gap: 10px; }
 .gcard > .field, .gcard .g-new > .field { flex: 0 0 auto; }
 /* Unngå tynne skjøter mellom kartfliser på skjermer med brøkdels pikselforhold */
 .leaflet-tile-container img.leaflet-tile { width: 256.5px !important; height: 256.5px !important; }
+/* Bla mellom bilder i lysbildevisningen */
+.lb-nav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 48px; height: 48px; border-radius: 50%; border: 0; display: grid; place-items: center; background: rgba(255, 255, 255, 0.15); color: #fff; cursor: pointer; }
+.lb-nav:hover { background: rgba(255, 255, 255, 0.3); }
+.lb-nav--prev { left: max(12px, env(safe-area-inset-left)); }
+.lb-nav--next { right: max(12px, env(safe-area-inset-right)); }
+.lb-count { position: absolute; top: max(20px, calc(env(safe-area-inset-top) + 8px)); left: 16px; font-size: 14px; font-variant-numeric: tabular-nums; color: #dfe5e2; }
+@media (max-width: 760px) {
+  .lb-nav { width: 40px; height: 40px; background: rgba(0, 0, 0, 0.35); }
+}

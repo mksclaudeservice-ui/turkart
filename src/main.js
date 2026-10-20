@@ -58,6 +58,7 @@ const ICON = {
   image: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>',
   link: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>',
   list: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>',
+  chevronRight: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>',
   chevronLeft: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>',
   pin: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>',
   route: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h7a3.5 3.5 0 0 0 0-7H9a3.5 3.5 0 0 1 0-7h7"/></svg>',
@@ -1954,17 +1955,42 @@ function linkToursDialog(trip) {
 }
 
 // ---------- lightbox ----------
-async function openPhoto(path) {
+// Bildene i visningen som er åpen, så man kan bla mellom dem.
+const lbState = { list: [], i: 0, token: 0 };
+function photoListFromPage() {
+  const paths = [...document.querySelectorAll('[data-action="open-photo"]')].filter((el) => !el.closest('#lightbox')).map((el) => el.dataset.path);
+  return [...new Set(paths)];
+}
+function stepPhoto(dir) {
+  const n = lbState.list.length;
+  if (n < 2 || $('#lightbox').hidden) return;
+  lbState.i = (lbState.i + dir + n) % n;
+  openPhoto(lbState.list[lbState.i], { keepList: true });
+}
+async function openPhoto(path, { keepList = false } = {}) {
+  if (!keepList) {
+    lbState.list = photoListFromPage();
+    if (!lbState.list.includes(path)) lbState.list = [path];
+  }
+  lbState.i = Math.max(0, lbState.list.indexOf(path));
+  const token = ++lbState.token;
   const lb = $('#lightbox');
   const photo = state.photos.find((p) => p.storage_path === path);
   lb.hidden = false;
   const sel = state.selected;
   const canCover = photo && sel && (sel.type === 'place' ? photo.place_id === sel.id : coverTarget('trip', sel.id).photos.some((x) => x.id === photo.id));
   const top = `<div class="lb-bar">${canCover ? `<button type="button" class="btn btn--glass" data-action="set-cover" data-id="${photo.id}">${ICON.image}Sett som hovedbilde</button>` : ''}<button type="button" class="icon-btn lb-btn" data-action="delete-photo" data-id="${photo?.id ?? ''}" aria-label="Slett bilde" title="Slett bilde">${ICON.trash}</button><button type="button" class="icon-btn lb-btn" data-action="close-photo" aria-label="Lukk">${ICON.close}</button></div>`;
-  lb.innerHTML = `${top}<p>Laster …</p>`;
-  const urls = await signedUrls([path]);
+  const n = lbState.list.length;
+  const nav = n > 1
+    ? `<button type="button" class="lb-nav lb-nav--prev" data-action="photo-prev" aria-label="Forrige bilde">${ICON.chevronLeft}</button><button type="button" class="lb-nav lb-nav--next" data-action="photo-next" aria-label="Neste bilde">${ICON.chevronRight}</button><span class="lb-count">${lbState.i + 1} / ${n}</span>`
+    : '';
+  if (!keepList || !lb.querySelector('img')) lb.innerHTML = `${top}${nav}<p>Laster …</p>`;
+  const neighbours = n > 1 ? [lbState.list[(lbState.i + 1) % n], lbState.list[(lbState.i - 1 + n) % n]] : [];
+  const urls = await signedUrls([path, ...neighbours]);
+  if (token !== lbState.token) return;
+  for (const nb of neighbours) if (urls[nb]) new Image().src = urls[nb];
   const hasPos = photo && photo.lat != null && photo.lon != null;
-  lb.innerHTML = `${top}<img alt="" src="${urls[path]}" />${
+  lb.innerHTML = `${top}${nav}<img alt="" src="${urls[path]}" />${
     photo ? `<div class="lb-info">${photo.taken_at ? `<span>${fmtDate(photo.taken_at)}</span>` : ''}${hasPos ? `<span>${fmtCoord(photo.lat, photo.lon)}</span><div class="minimap minimap--lb"></div>` : '<span class="muted">Ingen posisjon i bildet</span>'}</div>` : ''
   }`;
   if (hasPos) miniMap($('.minimap--lb', lb), photo.lat, photo.lon, { zoom: 12 });
@@ -2093,6 +2119,8 @@ document.addEventListener('click', async (e) => {
   else if (a === 'close-dlg') closeDialog();
   else if (a === 'open-photo') openPhoto(t.dataset.path);
   else if (a === 'close-photo') $('#lightbox').hidden = true;
+  else if (a === 'photo-prev') stepPhoto(-1);
+  else if (a === 'photo-next') stepPhoto(1);
   else if (a === 'delete-photo') {
     if (!id) return;
     confirmDialog('Bildet slettes permanent fra Turkart. Originalen i iCloud påvirkes ikke.', async () => {
@@ -2109,8 +2137,29 @@ document.addEventListener('click', async (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !$('#lightbox')?.hidden) $('#lightbox').hidden = true;
+  if ($('#lightbox')?.hidden) return;
+  if (e.key === 'Escape') $('#lightbox').hidden = true;
+  else if (e.key === 'ArrowLeft') stepPhoto(-1);
+  else if (e.key === 'ArrowRight') stepPhoto(1);
 });
+
+// Sveip til siden for å bla på mobil.
+{
+  let x0 = null;
+  let y0 = null;
+  document.addEventListener('touchstart', (e) => {
+    if (!e.target.closest('#lightbox') || e.target.closest('.minimap') || e.touches.length > 1) return (x0 = null);
+    x0 = e.touches[0].clientX;
+    y0 = e.touches[0].clientY;
+  }, { passive: true });
+  document.addEventListener('touchend', (e) => {
+    if (x0 == null) return;
+    const dx = e.changedTouches[0].clientX - x0;
+    const dy = e.changedTouches[0].clientY - y0;
+    x0 = null;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) stepPhoto(dx < 0 ? 1 : -1);
+  }, { passive: true });
+}
 
 function addMenu() {
   openDialog(
