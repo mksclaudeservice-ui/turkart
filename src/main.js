@@ -1275,6 +1275,10 @@ function groupCard(g, i) {
         }).join('') : ''}
         <option value="new" ${g.nearby.length ? '' : 'selected'}>Nytt sted</option>
         <option value="skip">Hopp over (legg i Usortert)</option>
+        ${(() => {
+          const others = state.places.filter((p) => !g.nearby.some((n) => n.id === p.id)).sort((a, b) => a.name.localeCompare(b.name, 'nb'));
+          return others.length ? `<optgroup label="Koble til annen tur eller sted">${others.map((p) => `<option value="existing:${p.id}">${esc(p.name)}</option>`).join('')}</optgroup>` : '';
+        })()}
       </select></label>
     <div class="preview preview--sm" id="g${i}-preview"></div>
     ${g.noPosition ? `<div class="g-new"><label class="field"><span>Søk etter sted</span><input id="g${i}-search" type="search" autocomplete="off" placeholder="F.eks. Gaustatoppen" /></label><div id="g${i}-results" class="results"></div></div>` : ''}
