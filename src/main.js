@@ -97,7 +97,7 @@ async function loadData() {
     supabase.from('places').select('*').order('created_at'),
     supabase.from('visits').select('*').order('visited_on', { ascending: false }),
     supabase.from('trips').select('*').order('start_date', { ascending: false }),
-    supabase.from('photos').select('id,thumb_path,storage_path,place_id,visit_id,trip_id,taken_at,lat,lon,created_at').order('taken_at'),
+    supabase.from('photos').select('id,thumb_path,storage_path,place_id,visit_id,trip_id,taken_at,lat,lon,created_at,focus_x,focus_y').order('taken_at'),
     supabase.from('people').select('*').order('created_at'),
     supabase.from('visit_people').select('*'),
     supabase.from('trip_people').select('*')
@@ -132,6 +132,7 @@ function derive() {
 }
 
 // ---------- hovedbilder ----------
+const focusPos = (ph) => `${ph?.focus_x ?? 50}% ${ph?.focus_y ?? 50}%`;
 const photoById = (id) => (id ? state.photos.find((ph) => ph.id === id) : null);
 const firstUploaded = (list) => [...list].sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''))[0] ?? null;
 const tripPhotos = (t) => state.photos.filter((ph) => ph.trip_id === t.id);
@@ -326,7 +327,13 @@ function render({ fit = false } = {}) {
     state.mode === 'reise'
       ? visibleTrips().map((t) => tripStops(t).filter((p) => p.mode === 'reise').sort((a, b) => (a.lastVisit ?? '').localeCompare(b.lastVisit ?? '')))
       : [];
+  for (const p of places) {
+    const c = placeCover(p);
+    p.pinThumb = c ? c.thumb_path : null;
+    p.pinPos = c ? focusPos(c) : '50% 50%';
+  }
   state.map.render(places, { selectedId: state.selected?.type === 'place' ? state.selected.id : null, routes });
+  hydrateThumbs($('#map'));
   if (fit) state.map.fitTo(places);
   renderDetail();
 }
@@ -352,7 +359,7 @@ function placeRow(p) {
           .filter(Boolean)
           .join(' · ');
   return `<button type="button" class="row ${p.status === 'wish' ? 'row--wish' : ''} ${state.selected?.id === p.id ? 'row--on' : ''}" data-action="select-place" data-id="${p.id}">
-    <span class="thumb" ${thumb ? `data-thumb="${esc(thumb.thumb_path)}"` : ''}>${thumb ? '' : ICON.mountain}</span>
+    <span class="thumb" ${thumb ? `data-thumb="${esc(thumb.thumb_path)}" style="background-position:${focusPos(thumb)}"` : ''}>${thumb ? '' : ICON.mountain}</span>
     <span class="row-text"><span class="row-title">${esc(p.name)}</span><span class="row-meta">${meta || KIND_LABEL[p.kind]}</span></span>
   </button>`;
 }
@@ -399,7 +406,7 @@ function tripRow(t) {
     .filter(Boolean)
     .join(' · ');
   return `<button type="button" class="row ${t.status === 'wish' ? 'row--wish' : ''} ${state.selected?.id === t.id ? 'row--on' : ''}" data-action="select-trip" data-id="${t.id}">
-    <span class="thumb" ${thumb ? `data-thumb="${esc(thumb.thumb_path)}"` : ''}>${thumb ? '' : ICON.plane}</span>
+    <span class="thumb" ${thumb ? `data-thumb="${esc(thumb.thumb_path)}" style="background-position:${focusPos(thumb)}"` : ''}>${thumb ? '' : ICON.plane}</span>
     <span class="row-text"><span class="row-title">${esc(t.title)}</span><span class="row-meta">${meta || 'Uten dato'}${peaks ? ` · ${peaks} toppturer` : ''}</span></span>
   </button>`;
 }
@@ -502,11 +509,11 @@ function photoGrid(photos) {
 
 function coverBlock(type, item, cover) {
   const chosen = Boolean(item.cover_photo_id && cover);
-  return `<div class="cover ${cover ? '' : 'cover--empty'}" ${cover ? `data-thumb="${esc(cover.storage_path)}"` : ''}>
+  return `<div class="cover ${cover ? '' : 'cover--empty'}" ${cover ? `data-thumb="${esc(cover.storage_path)}" style="background-position:${focusPos(cover)}"` : ''}>
     ${cover ? `<button type="button" class="cover-open" data-action="open-photo" data-path="${esc(cover.storage_path)}" aria-label="Åpne hovedbilde"></button>` : `<span class="cover-ph">${ICON.image}<span>Ingen bilder ennå</span></span>`}
     ${cover && !chosen ? '<span class="cover-badge">Første bilde</span>' : ''}
     <div class="cover-actions">
-      <button type="button" class="btn btn--glass" data-action="cover-pick" data-type="${type}" data-id="${item.id}">${ICON.image}${cover ? 'Bytt hovedbilde' : 'Legg til hovedbilde'}</button>
+      <button type="button" class="btn btn--glass" data-action="cover-pick" data-type="${type}" data-id="${item.id}">${ICON.image}${cover ? 'Juster eller bytt' : 'Legg til hovedbilde'}</button>
       ${chosen ? `<button type="button" class="btn btn--glass" data-action="cover-reset" data-type="${type}" data-id="${item.id}">Fjern valg</button>` : ''}
     </div>
   </div>`;
@@ -1481,6 +1488,21 @@ function coverDialog(type, id) {
   openDialog(
     `<div class="form">
       <div class="dlg-head"><h2>Hovedbilde</h2><button type="button" class="icon-btn" data-action="close-dlg" aria-label="Lukk">${ICON.close}</button></div>
+      ${cover ? `<section class="focus-edit">
+        <h3 class="eyebrow">Midtpunkt</h3>
+        <p class="muted hint-sm">Trykk eller dra i bildet for å velge hva som skal være i midten av utsnittet.</p>
+        <div class="focus-stage" id="fx-stage">
+          <img id="fx-img" alt="Hovedbildet" data-thumb="${esc(cover.storage_path)}" draggable="false" />
+          <span class="focus-dot" id="fx-dot" style="left:${cover.focus_x ?? 50}%;top:${cover.focus_y ?? 50}%"></span>
+        </div>
+        <div class="focus-previews" aria-hidden="true">
+          <span class="fprev fprev--wide" data-thumb="${esc(cover.storage_path)}" style="background-position:${focusPos(cover)}"></span>
+          <span class="fprev fprev--sq" data-thumb="${esc(cover.thumb_path)}" style="background-position:${focusPos(cover)}"></span>
+          <span class="fprev fprev--pin ${type === 'trip' ? 'fprev--reise' : ''}" data-thumb="${esc(cover.thumb_path)}" style="background-position:${focusPos(cover)}"></span>
+        </div>
+        <div class="dlg-actions"><button type="button" class="btn btn--ghost" id="fx-reset">Midtstill</button><button type="button" class="btn btn--dark" id="fx-save">Lagre midtpunkt</button></div>
+      </section>
+      <h3 class="eyebrow">Velg et annet bilde</h3>` : ''}
       <p class="muted">Velg et av bildene, eller last opp et nytt. Uten valg brukes det første bildet som ble lastet opp.</p>
       ${photos.length ? `<div class="cover-grid">${photos
         .map((ph) => `<button type="button" class="cthumb ${cover?.id === ph.id ? 'cthumb--on' : ''}" data-photo="${ph.id}" data-thumb="${esc(ph.thumb_path)}" aria-label="Velg som hovedbilde" aria-pressed="${cover?.id === ph.id}"></button>`)
@@ -1492,6 +1514,44 @@ function coverDialog(type, id) {
     </div>`,
     (d) => {
       hydrateThumbs(d);
+      const stage = $('#fx-stage', d);
+      if (stage) {
+        let fx = cover.focus_x ?? 50;
+        let fy = cover.focus_y ?? 50;
+        const apply = () => {
+          const pos = `${fx}% ${fy}%`;
+          $('#fx-dot', d).style.left = `${fx}%`;
+          $('#fx-dot', d).style.top = `${fy}%`;
+          d.querySelectorAll('.fprev').forEach((el) => (el.style.backgroundPosition = pos));
+        };
+        const setFrom = (e) => {
+          const r = $('#fx-img', d).getBoundingClientRect();
+          fx = Math.round(Math.min(100, Math.max(0, ((e.clientX - r.left) / r.width) * 100)));
+          fy = Math.round(Math.min(100, Math.max(0, ((e.clientY - r.top) / r.height) * 100)));
+          apply();
+        };
+        let dragging = false;
+        stage.addEventListener('pointerdown', (e) => {
+          dragging = true;
+          stage.setPointerCapture(e.pointerId);
+          setFrom(e);
+        });
+        stage.addEventListener('pointermove', (e) => dragging && setFrom(e));
+        stage.addEventListener('pointerup', () => (dragging = false));
+        $('#fx-reset', d).addEventListener('click', () => {
+          fx = 50;
+          fy = 50;
+          apply();
+        });
+        $('#fx-save', d).addEventListener('click', async () => {
+          const { error } = await supabase.from('photos').update({ focus_x: fx, focus_y: fy }).eq('id', cover.id);
+          if (error) return toast(`Kunne ikke lagre: ${error.message}`, 'err');
+          closeDialog();
+          await loadData();
+          render();
+          toast('Midtpunkt lagret');
+        });
+      }
       d.querySelectorAll('[data-photo]').forEach((b) =>
         b.addEventListener('click', async () => {
           closeDialog();
@@ -1539,7 +1599,7 @@ function linkToursDialog(trip) {
   const opt = (p) => {
     const hint = p.visitsList.some((v) => inRange(v.visited_on)) ? '<span class="tag">I reiseperioden</span>' : '';
     return `<label class="lt-opt"><input type="checkbox" value="${p.id}" ${linked.has(p.id) ? 'checked' : ''} />
-      <span class="thumb thumb--sm" ${placeCover(p) ? `data-thumb="${esc(placeCover(p).thumb_path)}"` : ''}>${placeCover(p) ? '' : ICON.mountain}</span>
+      <span class="thumb thumb--sm" ${placeCover(p) ? `data-thumb="${esc(placeCover(p).thumb_path)}" style="background-position:${focusPos(placeCover(p))}"` : ''}>${placeCover(p) ? '' : ICON.mountain}</span>
       <span class="row-text"><span class="row-title">${esc(p.name)}</span><span class="row-meta">${[KIND_LABEL[p.kind], fmtDate(p.lastVisit)].filter(Boolean).join(' · ')}</span></span>${hint}</label>`;
   };
   openDialog(

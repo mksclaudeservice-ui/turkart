@@ -437,3 +437,38 @@ fieldset.visit-only { display: flex; flex-direction: column; gap: 10px; }
 /* iOS: datofelt skal ikke bli bredere enn kolonnen */
 .field input[type='date'] { -webkit-appearance: none; appearance: none; min-width: 0; max-width: 100%; display: block; text-align: left; }
 .field input[type='date']::-webkit-date-and-time-value { text-align: left; }
+
+/* Bildenåler på kartet */
+.pin-ph { position: relative; border-radius: 50%; }
+.pin-photo {
+  position: absolute; inset: 0; border-radius: 50%; border: 3px solid #2f5d50;
+  background: #cfd8d3 center/cover no-repeat; box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
+}
+.pin-ph--reise .pin-photo { border-color: #2b5c8a; }
+.pin-ph--wish .pin-photo { border: 3px dashed #b5541c; }
+.pin-peak {
+  position: absolute; left: 50%; top: -11px; transform: translateX(-50%); width: 22px; height: 22px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; background: #2f5d50; color: #fff; border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+.pin-ph--reise .pin-peak { background: #2b5c8a; }
+.pin-ph--wish .pin-peak { background: #b5541c; }
+.pin-ph.pin--selected .pin-photo { border-color: #f2b705; }
+.pin-ph.pin--selected { outline: none; z-index: 1000 !important; }
+
+/* Midtpunkt for utsnitt */
+.focus-edit { display: flex; flex-direction: column; gap: 10px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.focus-edit .eyebrow, .form > .eyebrow { margin: 0; }
+.focus-stage { position: relative; align-self: center; max-width: 100%; touch-action: none; cursor: crosshair; user-select: none; -webkit-user-select: none; }
+.focus-stage img { display: block; max-width: 100%; max-height: 42vh; border-radius: 10px; }
+.focus-dot {
+  position: absolute; width: 28px; height: 28px; margin: -14px 0 0 -14px; border-radius: 50%; pointer-events: none;
+  border: 3px solid #fff; box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.5), inset 0 0 0 2px rgba(0, 0, 0, 0.35);
+}
+.focus-dot::after { content: ''; position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: #fff; }
+.focus-previews { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.fprev { display: block; background: var(--bg) center/cover no-repeat; border-radius: 8px; flex-shrink: 0; }
+.fprev--wide { width: 128px; height: 80px; }
+.fprev--sq { width: 64px; height: 64px; }
+.fprev--pin { width: 46px; height: 46px; border-radius: 50%; border: 3px solid #2f5d50; }
+.fprev--reise { border-color: #2b5c8a; }

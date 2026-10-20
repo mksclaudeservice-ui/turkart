@@ -36,6 +36,8 @@ const LAYERS = {
   }
 };
 
+const ICON_PLANE =
+  '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 16l20-6-3-3-7 2-5-5-2 1 3 6-4 1-2-2-1 1z"/></svg>';
 const ICON_MOUNTAIN =
   '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 20l6-11 4 6 2-3 6 8z"/></svg>';
 
@@ -126,14 +128,19 @@ export class TurMap {
         L.polyline(r.map((p) => [p.lat, p.lon]), { color: '#2B5C8A', weight: 3, dashArray: '6 6' }).addTo(this.routes);
     }
     for (const p of places) {
-      const cls = [
-        'pin',
-        p.status === 'wish' ? 'pin--wish' : `pin--${p.mode}`,
-        p.id === selectedId ? 'pin--selected' : ''
-      ].join(' ');
-      const html = p.status === 'wish' ? '' : p.mode === 'fjell' ? ICON_MOUNTAIN : '';
-      const icon = L.divIcon({ className: cls, html, iconSize: [28, 28], iconAnchor: [14, 14] });
-      L.marker([p.lat, p.lon], { icon, title: p.name, keyboard: true })
+      let icon;
+      if (p.pinThumb) {
+        // Bildenål: rundt utsnitt av hovedbildet, farget ramme og et lite merke på toppen.
+        const cls = ['pin-ph', `pin-ph--${p.status === 'wish' ? 'wish' : p.mode}`, p.id === selectedId ? 'pin--selected' : ''].join(' ');
+        const badge = p.mode === 'fjell' ? ICON_MOUNTAIN : ICON_PLANE;
+        const html = `<span class="pin-photo" data-thumb="${p.pinThumb}" style="background-position:${p.pinPos}"></span><span class="pin-peak">${badge}</span>`;
+        icon = L.divIcon({ className: cls, html, iconSize: [46, 46], iconAnchor: [23, 23] });
+      } else {
+        const cls = ['pin', p.status === 'wish' ? 'pin--wish' : `pin--${p.mode}`, p.id === selectedId ? 'pin--selected' : ''].join(' ');
+        const html = p.status === 'wish' ? '' : p.mode === 'fjell' ? ICON_MOUNTAIN : '';
+        icon = L.divIcon({ className: cls, html, iconSize: [28, 28], iconAnchor: [14, 14] });
+      }
+      L.marker([p.lat, p.lon], { icon, title: p.name, keyboard: true, riseOnHover: true })
         .on('click', () => this.onPlaceClick?.(p))
         .addTo(this.markers);
     }

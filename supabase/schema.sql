@@ -200,3 +200,7 @@ update public.people set emails = array['admin1@example.com', 'admin2@example.co
   where name = 'Markus Søderlind' and emails = '{}';
 update public.people set emails = array['medlem@example.com']
   where name = 'Karoline' and emails = '{}';
+
+-- 12. Midtpunkt for bildeutsnitt (prosent, null = midten) ------------------------
+alter table public.photos add column if not exists focus_x real;
+alter table public.photos add column if not exists focus_y real;
