@@ -2,7 +2,7 @@ import './style.css';
 import { supabase, configured, signedUrls, BUCKET } from './supabase.js';
 import { TurMap, miniMap } from './map.js';
 import { searchPlaces, elevationFor, nameForPoint } from './geo.js';
-import { isImageFile, processFile, existingHashes, uploadAll } from './upload.js';
+import { isImageFile, processFile, existingHashes, uploadAll, squareJpeg } from './upload.js';
 import { clusterPhotos, suggestForGroups } from './grouping.js';
 
 const app = document.getElementById('app');
@@ -53,6 +53,9 @@ const ICON = {
   upload: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4M6 10l6-6 6 6M4 20h16"/></svg>',
   inbox: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 13l3-8h10l3 8v6H4z"/><path d="M4 13h5l1 2h4l1-2h5"/></svg>',
   note: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h10l4 4v12H5z"/><path d="M15 4v4h4M8 12h8M8 16h5"/></svg>',
+  users: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.4 3.2-5.5 6.5-5.5s5.9 2.1 6.5 5.5"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18.5 14.8c1.7.8 2.8 2.6 3 5.2"/></svg>',
+  image: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>',
+  link: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>',
   trash: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>',
   close: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>'
 };
@@ -68,6 +71,9 @@ const state = {
   photos: [],
   notes: [],
   notesFilter: 'open',
+  people: [],
+  visitPeople: [],
+  tripPeople: [],
   selected: null, // {type:'place'|'trip', id}
   picking: null,
   map: null
@@ -84,17 +90,23 @@ function toast(msg, kind = 'ok') {
 
 // ---------- data ----------
 async function loadData() {
-  const [p, v, t, ph] = await Promise.all([
+  const [p, v, t, ph, pe, vp, tp] = await Promise.all([
     supabase.from('places').select('*').order('created_at'),
     supabase.from('visits').select('*').order('visited_on', { ascending: false }),
     supabase.from('trips').select('*').order('start_date', { ascending: false }),
-    supabase.from('photos').select('id,thumb_path,storage_path,place_id,visit_id,trip_id,taken_at,lat,lon').order('taken_at')
+    supabase.from('photos').select('id,thumb_path,storage_path,place_id,visit_id,trip_id,taken_at,lat,lon,created_at').order('taken_at'),
+    supabase.from('people').select('*').order('created_at'),
+    supabase.from('visit_people').select('*'),
+    supabase.from('trip_people').select('*')
   ]);
   for (const r of [p, v, t, ph]) if (r.error) throw r.error;
   state.places = p.data;
   state.visits = v.data;
   state.trips = t.data;
   state.photos = ph.data;
+  state.people = pe.data ?? [];
+  state.visitPeople = vp.data ?? [];
+  state.tripPeople = tp.data ?? [];
   derive();
   await loadNotes();
 }
@@ -112,6 +124,69 @@ function derive() {
   for (const v of state.visits) byPlace.get(v.place_id)?.visitsList.push(v);
   for (const ph of state.photos) if (ph.place_id) byPlace.get(ph.place_id)?.photoList.push(ph);
   for (const pl of state.places) pl.lastVisit = pl.visitsList.find((v) => v.visited_on)?.visited_on ?? null;
+  for (const v of state.visits) v.people = state.visitPeople.filter((x) => x.visit_id === v.id).map((x) => x.person_id);
+  for (const t of state.trips) t.people = state.tripPeople.filter((x) => x.trip_id === t.id).map((x) => x.person_id);
+}
+
+// ---------- hovedbilder ----------
+const photoById = (id) => (id ? state.photos.find((ph) => ph.id === id) : null);
+const firstUploaded = (list) => [...list].sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''))[0] ?? null;
+const tripPhotos = (t) => state.photos.filter((ph) => ph.trip_id === t.id);
+const placeCover = (p) => photoById(p.cover_photo_id) ?? firstUploaded(p.photoList ?? []);
+const tripCover = (t) => photoById(t.cover_photo_id) ?? firstUploaded(tripPhotos(t)) ?? tripStops(t).map(placeCover).find(Boolean) ?? null;
+
+// ---------- personer ----------
+const initials = (name) => {
+  const w = String(name ?? '').trim().split(/\s+/).filter(Boolean);
+  return ((w[0]?.[0] ?? '') + (w.length > 1 ? w[w.length - 1][0] : '')).toUpperCase() || '?';
+};
+const personById = (id) => state.people.find((p) => p.id === id);
+function personAvatar(p, size = 'sm') {
+  return `<span class="pav pav--${size}" title="${esc(p.name)}" ${p.avatar_path ? `data-thumb="${esc(p.avatar_path)}"` : ''}>${esc(initials(p.name))}</span>`;
+}
+function peopleRow(ids = []) {
+  const ps = ids.map(personById).filter(Boolean);
+  if (!ps.length) return '';
+  return `<div class="people">${ps.map((p) => `<span class="person">${personAvatar(p)}<span>${esc(p.name.split(' ')[0])}</span></span>`).join('')}</div>`;
+}
+function peoplePicker(name, selected = []) {
+  return `<fieldset class="ppick" data-name="${name}"><legend>Hvem var med?</legend>
+    <div class="ppick-list">${state.people
+      .map((p) => `<label class="ppick-opt"><input type="checkbox" name="${name}" value="${p.id}" ${selected.includes(p.id) ? 'checked' : ''} />${personAvatar(p)}<span>${esc(p.name)}</span></label>`)
+      .join('')}</div>
+    <div class="ppick-add"><input type="text" placeholder="Legg til ny person" aria-label="Navn på ny person" /><button type="button" class="btn btn--ghost">Legg til</button></div>
+  </fieldset>`;
+}
+function wirePeoplePicker(root) {
+  hydrateThumbs(root);
+  root.querySelectorAll('.ppick').forEach((fs) => {
+    const input = $('.ppick-add input', fs);
+    const add = async () => {
+      const name = input.value.trim();
+      if (!name) return;
+      const { data, error } = await supabase.from('people').insert({ name }).select('*').single();
+      if (error) return toast(`Kunne ikke legge til: ${error.message}`, 'err');
+      state.people.push(data);
+      $('.ppick-list', fs).insertAdjacentHTML('beforeend', `<label class="ppick-opt"><input type="checkbox" name="${fs.dataset.name}" value="${data.id}" checked />${personAvatar(data)}<span>${esc(data.name)}</span></label>`);
+      input.value = '';
+    };
+    $('.ppick-add button', fs).addEventListener('click', add);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        add();
+      }
+    });
+  });
+}
+const pickedPeople = (root, name) => [...root.querySelectorAll(`input[name="${name}"]:checked`)].map((i) => i.value);
+async function setLinks(table, key, id, personIds) {
+  const del = await supabase.from(table).delete().eq(key, id);
+  if (del.error) throw del.error;
+  if (personIds.length) {
+    const ins = await supabase.from(table).insert(personIds.map((pid) => ({ [key]: id, person_id: pid })));
+    if (ins.error) throw ins.error;
+  }
 }
 
 const visibleTrips = () =>
@@ -165,6 +240,7 @@ function renderShell() {
               <a class="menu-link" href="${ADMIN.db}" target="_blank" rel="noopener">${ICON.inbox}<span>Database og brukere<small>Supabase</small></span></a>
               <a class="menu-link" href="${ADMIN.auth}" target="_blank" rel="noopener">${ICON.plane}<span>Innlogging og tilgang<small>Supabase Auth</small></span></a>
             </div>` : ''}
+            <button type="button" class="menu-link menu-link--btn" data-action="people">${ICON.users}<span>Personer<small>Navn og profilbilder</small></span></button>
             <button type="button" class="btn btn--ghost" data-action="signout">Logg ut</button>
           </div>
         </div>
@@ -220,7 +296,7 @@ function filterChips() {
 }
 
 function placeRow(p) {
-  const thumb = p.photoList[0];
+  const thumb = placeCover(p);
   const meta =
     p.status === 'wish'
       ? [p.elevation ? `${num(p.elevation)} moh.` : '', p.wish_season ? `Beste tid: ${esc(p.wish_season)}` : ''].filter(Boolean).join(' · ')
@@ -270,7 +346,7 @@ function sideFjell() {
 function tripRow(t) {
   const stops = tripStops(t);
   const peaks = stops.filter((p) => p.mode === 'fjell').length;
-  const thumb = state.photos.find((ph) => ph.trip_id === t.id);
+  const thumb = tripCover(t);
   const meta = [fmtRange(t.start_date, t.end_date), nights(t.start_date, t.end_date) ? `${nights(t.start_date, t.end_date)} netter` : '', t.countries.join(', ')]
     .filter(Boolean)
     .join(' · ');
@@ -364,6 +440,19 @@ function photoGrid(photos) {
     .join('')}</div>`;
 }
 
+
+function coverBlock(type, item, cover) {
+  const chosen = Boolean(item.cover_photo_id && cover);
+  return `<div class="cover ${cover ? '' : 'cover--empty'}" ${cover ? `data-thumb="${esc(cover.storage_path)}"` : ''}>
+    ${cover ? `<button type="button" class="cover-open" data-action="open-photo" data-path="${esc(cover.storage_path)}" aria-label="Åpne hovedbilde"></button>` : `<span class="cover-ph">${ICON.image}<span>Ingen bilder ennå</span></span>`}
+    ${cover && !chosen ? '<span class="cover-badge">Første bilde</span>' : ''}
+    <div class="cover-actions">
+      <button type="button" class="btn btn--glass" data-action="cover-pick" data-type="${type}" data-id="${item.id}">${ICON.image}${cover ? 'Bytt hovedbilde' : 'Legg til hovedbilde'}</button>
+      ${chosen ? `<button type="button" class="btn btn--glass" data-action="cover-reset" data-type="${type}" data-id="${item.id}">Fjern valg</button>` : ''}
+    </div>
+  </div>`;
+}
+
 function placeDetail(p) {
   if (!p) return '';
   const trips = [...new Set(p.visitsList.map((v) => v.trip_id).filter(Boolean))].map((id) => state.trips.find((t) => t.id === id)).filter(Boolean);
@@ -372,18 +461,24 @@ function placeDetail(p) {
       <div class="chips-inline"><span class="tag">${KIND_LABEL[p.kind]}</span><span class="tag ${p.status === 'wish' ? 'tag--wish' : ''}">${p.status === 'wish' ? 'Ønsker' : 'Besøkt'}</span></div>
       <button type="button" class="icon-btn" data-action="close-detail" aria-label="Lukk">${ICON.close}</button>
     </div>
+    ${coverBlock('place', p, placeCover(p))}
     <h2>${esc(p.name)}</h2>
     <p class="muted">${[p.elevation ? `${num(p.elevation)} moh.` : '', p.country].filter(Boolean).join(' · ')}</p>
     ${p.status === 'wish' && (p.wish_season || p.wish_priority) ? `<p>${p.wish_season ? `Beste tid: ${esc(p.wish_season)}. ` : ''}${p.wish_priority ? `Prioritet: ${['', 'høy', 'middels', 'lav'][p.wish_priority]}.` : ''}</p>` : ''}
     ${p.notes ? `<p class="note">${esc(p.notes)}</p>` : ''}
     ${p.visitsList.length ? `<h3 class="eyebrow">Besøk</h3><ul class="visits">${p.visitsList
       .map(
-        (v) => `<li><b>${v.visited_on ? fmtDate(v.visited_on) : 'Uten dato'}</b>
-        ${[v.distance_km ? `${num(v.distance_km)} km` : '', v.ascent_m ? `${num(v.ascent_m)} hm` : '', v.duration_min ? `${Math.floor(v.duration_min / 60)} t ${v.duration_min % 60} min` : ''].filter(Boolean).join(' · ')}
-        ${v.notes ? `<p>${esc(v.notes)}</p>` : ''}</li>`
+        (v) => {
+          const trip = state.trips.find((t) => t.id === v.trip_id);
+          return `<li><div class="visit-head"><b>${v.visited_on ? fmtDate(v.visited_on) : 'Uten dato'}</b>
+          <button type="button" class="btn btn--link btn--xs" data-action="edit-visit" data-id="${v.id}">Endre</button></div>
+          ${[v.distance_km ? `${num(v.distance_km)} km` : '', v.ascent_m ? `${num(v.ascent_m)} hm` : '', v.duration_min ? `${Math.floor(v.duration_min / 60)} t ${v.duration_min % 60} min` : ''].filter(Boolean).join(' · ')}
+          ${peopleRow(v.people)}
+          ${trip ? `<button type="button" class="trip-pill" data-action="select-trip" data-id="${trip.id}">${ICON.plane}${esc(trip.title)}</button>` : ''}
+          ${v.notes ? `<p>${esc(v.notes)}</p>` : ''}</li>`;
+        }
       )
       .join('')}</ul>` : ''}
-    ${trips.map((t) => `<button type="button" class="link-card" data-action="select-trip" data-id="${t.id}">${ICON.plane}<span>Del av reisen <b>${esc(t.title)}</b></span></button>`).join('')}
     <h3 class="eyebrow">Bilder</h3>
     ${photoGrid(p.photoList)}
     <div class="detail-actions">
@@ -396,17 +491,23 @@ function placeDetail(p) {
 function tripDetail(t) {
   if (!t) return '';
   const stops = tripStops(t);
-  const photos = state.photos.filter((ph) => ph.trip_id === t.id);
+  const tours = stops.filter((p) => p.mode === 'fjell');
+  const others = stops.filter((p) => p.mode !== 'fjell');
+  const photos = tripPhotos(t);
   return `
     <div class="detail-head">
       <div class="chips-inline"><span class="tag tag--trip">Reise</span>${t.status === 'wish' ? '<span class="tag tag--wish">Ønsker</span>' : ''}</div>
       <button type="button" class="icon-btn" data-action="close-detail" aria-label="Lukk">${ICON.close}</button>
     </div>
+    ${coverBlock('trip', t, tripCover(t))}
     <h2>${esc(t.title)}</h2>
     <p class="muted">${[fmtRange(t.start_date, t.end_date), nights(t.start_date, t.end_date) ? `${nights(t.start_date, t.end_date)} netter` : '', t.countries.join(', ')].filter(Boolean).join(' · ')}</p>
+    ${peopleRow(t.people)}
     ${t.notes ? `<p class="note">${esc(t.notes)}</p>` : ''}
-    <h3 class="eyebrow">Steder på reisen</h3>
-    ${stops.length ? stops.map(placeRow).join('') : '<p class="muted">Ingen steder koblet til ennå. Legg til et sted og velg denne reisen.</p>'}
+    <div class="section-head"><h3 class="eyebrow">Turer på reisen${tours.length ? ` (${tours.length})` : ''}</h3>
+      <button type="button" class="btn btn--link btn--xs" data-action="link-tours" data-id="${t.id}">${ICON.link}Koble til turer</button></div>
+    ${tours.length ? tours.map(placeRow).join('') : '<p class="muted">Ingen turer koblet til ennå.</p>'}
+    ${others.length ? `<h3 class="eyebrow">Steder</h3>${others.map(placeRow).join('')}` : ''}
     <h3 class="eyebrow">Bilder</h3>
     ${photoGrid(photos)}
     <div class="detail-actions">
@@ -578,37 +679,63 @@ function collectPlace(d) {
   };
 }
 
-function visitForm(place) {
+function visitForm(place, existing = null) {
+  const v0 = existing ?? {};
   openDialog(
     `<form id="visit-form" class="form">
-      <div class="dlg-head"><h2>Besøk – ${esc(place.name)}</h2><button type="button" class="icon-btn" data-action="close-dlg" aria-label="Lukk">${ICON.close}</button></div>
+      <div class="dlg-head"><h2>${existing ? 'Endre besøk' : 'Besøk'} – ${esc(place.name)}</h2><button type="button" class="icon-btn" data-action="close-dlg" aria-label="Lukk">${ICON.close}</button></div>
       <div class="field-row">
-        <label class="field"><span>Dato</span><input id="vf-date" type="date" required /></label>
-        <label class="field"><span>Reise</span><select id="vf-trip">${tripOptions()}</select></label>
+        <label class="field"><span>Dato</span><input id="vf-date" type="date" value="${v0.visited_on ?? ''}" /></label>
+        <label class="field"><span>Del av reise</span><select id="vf-trip">${tripOptions(v0.trip_id)}</select></label>
       </div>
+      ${peoplePicker('vf-people', v0.people ?? [])}
       <div class="field-row">
-        <label class="field"><span>Lengde (km)</span><input id="vf-km" inputmode="decimal" /></label>
-        <label class="field"><span>Høydemeter</span><input id="vf-hm" type="number" inputmode="numeric" /></label>
-        <label class="field"><span>Tid (minutter)</span><input id="vf-min" type="number" inputmode="numeric" /></label>
+        <label class="field"><span>Lengde (km)</span><input id="vf-km" inputmode="decimal" value="${v0.distance_km ?? ''}" /></label>
+        <label class="field"><span>Høydemeter</span><input id="vf-hm" type="number" inputmode="numeric" value="${v0.ascent_m ?? ''}" /></label>
+        <label class="field"><span>Tid (minutter)</span><input id="vf-min" type="number" inputmode="numeric" value="${v0.duration_min ?? ''}" /></label>
       </div>
-      <label class="field"><span>Notat</span><textarea id="vf-notes" rows="3"></textarea></label>
-      <div class="dlg-actions"><button type="button" class="btn btn--ghost" data-action="close-dlg">Avbryt</button><button type="submit" class="btn btn--dark">Lagre besøk</button></div>
+      <label class="field"><span>Notat</span><textarea id="vf-notes" rows="3">${esc(v0.notes ?? '')}</textarea></label>
+      <div class="dlg-actions">
+        ${existing ? '<button type="button" class="btn btn--danger" id="vf-delete">Slett besøk</button><span class="spacer"></span>' : ''}
+        <button type="button" class="btn btn--ghost" data-action="close-dlg">Avbryt</button><button type="submit" class="btn btn--dark">Lagre besøk</button>
+      </div>
     </form>`,
-    (d) =>
+    (d) => {
+      wirePeoplePicker(d);
+      $('#vf-delete', d)?.addEventListener('click', () =>
+        confirmDialog('Besøket slettes. Bildene beholdes på stedet.', async () => {
+          await supabase.from('photos').update({ visit_id: null }).eq('visit_id', existing.id);
+          const { error } = await supabase.from('visits').delete().eq('id', existing.id);
+          if (error) return toast(error.message, 'err');
+          await loadData();
+          render();
+          toast('Besøket er slettet');
+        })
+      );
       $('#visit-form', d).addEventListener('submit', async (e) => {
         e.preventDefault();
         const v = (id) => $(id, d).value.trim();
+        const row = {
+          visited_on: v('#vf-date') || null,
+          trip_id: v('#vf-trip') || null,
+          distance_km: v('#vf-km') ? parseFloat(v('#vf-km').replace(',', '.')) : null,
+          ascent_m: v('#vf-hm') ? parseInt(v('#vf-hm'), 10) : null,
+          duration_min: v('#vf-min') ? parseInt(v('#vf-min'), 10) : null,
+          notes: v('#vf-notes') || null
+        };
         try {
-          const { error } = await supabase.from('visits').insert({
-            place_id: place.id,
-            visited_on: v('#vf-date'),
-            trip_id: v('#vf-trip') || null,
-            distance_km: v('#vf-km') ? parseFloat(v('#vf-km').replace(',', '.')) : null,
-            ascent_m: v('#vf-hm') ? parseInt(v('#vf-hm'), 10) : null,
-            duration_min: v('#vf-min') ? parseInt(v('#vf-min'), 10) : null,
-            notes: v('#vf-notes') || null
-          });
-          if (error) throw error;
+          let id = existing?.id;
+          if (existing) {
+            const { error } = await supabase.from('visits').update(row).eq('id', id);
+            if (error) throw error;
+          } else {
+            const { data, error } = await supabase.from('visits').insert({ ...row, place_id: place.id }).select('id').single();
+            if (error) throw error;
+            id = data.id;
+          }
+          // Bildene fra besøket følger reisen.
+          await supabase.from('photos').update({ trip_id: row.trip_id }).eq('visit_id', id);
+          await setLinks('visit_people', 'visit_id', id, pickedPeople(d, 'vf-people'));
           if (place.status === 'wish') await supabase.from('places').update({ status: 'visited' }).eq('id', place.id);
           closeDialog();
           await loadData();
@@ -617,7 +744,8 @@ function visitForm(place) {
         } catch (err) {
           toast(`Kunne ikke lagre: ${err.message}`, 'err');
         }
-      })
+      });
+    }
   );
 }
 
@@ -633,10 +761,12 @@ function tripForm(existing = null) {
         <label class="field"><span>Status</span><select id="tf-status"><option value="done" ${t.status === 'done' ? 'selected' : ''}>Reist</option><option value="wish" ${t.status === 'wish' ? 'selected' : ''}>Ønsker</option></select></label>
       </div>
       <label class="field"><span>Land (kommaseparert)</span><input id="tf-countries" placeholder="Norge, Portugal" value="${esc(t.countries.join(', '))}" /></label>
+      ${peoplePicker('tf-people', t.people ?? [])}
       <label class="field"><span>Notat</span><textarea id="tf-notes" rows="3">${esc(t.notes ?? '')}</textarea></label>
       <div class="dlg-actions"><button type="button" class="btn btn--ghost" data-action="close-dlg">Avbryt</button><button type="submit" class="btn btn--dark">Lagre</button></div>
     </form>`,
-    (d) =>
+    (d) => {
+      wirePeoplePicker(d);
       $('#trip-form', d).addEventListener('submit', async (e) => {
         e.preventDefault();
         const v = (id) => $(id, d).value.trim();
@@ -658,6 +788,7 @@ function tripForm(existing = null) {
             if (error) throw error;
             id = data.id;
           }
+          await setLinks('trip_people', 'trip_id', id, pickedPeople(d, 'tf-people'));
           closeDialog();
           await loadData();
           state.mode = 'reise';
@@ -667,7 +798,8 @@ function tripForm(existing = null) {
         } catch (err) {
           toast(`Kunne ikke lagre: ${err.message}`, 'err');
         }
-      })
+      });
+    }
   );
 }
 
@@ -1099,12 +1231,241 @@ function notesDialog(context = currentContext()) {
   );
 }
 
+// ---------- personer (administrasjon) ----------
+function peopleDialog() {
+  openDialog(
+    `<div class="form">
+      <div class="dlg-head"><h2>Personer</h2><button type="button" class="icon-btn" data-action="close-dlg" aria-label="Lukk">${ICON.close}</button></div>
+      <p class="muted">Personer kan kobles til besøk og reiser. Uten bilde vises initialene.</p>
+      <ul class="plist">${state.people
+        .map(
+          (p) => `<li class="prow" data-id="${p.id}">
+          ${personAvatar(p, 'md')}
+          <input class="prow-name" value="${esc(p.name)}" aria-label="Navn" />
+          <div class="prow-actions">
+            <label class="btn btn--ghost btn--file btn--sm">${p.avatar_path ? 'Bytt bilde' : 'Last opp bilde'}<input type="file" accept="image/*,.heic,.heif" class="prow-file" /></label>
+            ${p.avatar_path ? '<button type="button" class="btn btn--ghost btn--sm prow-noimg">Fjern bilde</button>' : ''}
+            <button type="button" class="icon-btn icon-btn--sm prow-del" aria-label="Slett ${esc(p.name)}">${ICON.trash}</button>
+          </div>
+        </li>`
+        )
+        .join('')}</ul>
+      <form class="field-row" id="pnew">
+        <label class="field"><span>Ny person</span><input id="pnew-name" placeholder="Fullt navn" required /></label>
+        <button type="submit" class="btn btn--dark btn--self">Legg til</button>
+      </form>
+    </div>`,
+    (d) => {
+      hydrateThumbs(d);
+      const refresh = async (msg) => {
+        await loadData();
+        render();
+        peopleDialog();
+        if (msg) toast(msg);
+      };
+      $('#pnew', d).addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const { error } = await supabase.from('people').insert({ name: $('#pnew-name', d).value.trim() });
+        if (error) return toast(error.message, 'err');
+        refresh('Person lagt til');
+      });
+      d.querySelectorAll('.prow').forEach((row) => {
+        const pid = row.dataset.id;
+        const person = personById(pid);
+        $('.prow-name', row).addEventListener('change', async (e) => {
+          const name = e.target.value.trim();
+          if (!name) return;
+          const { error } = await supabase.from('people').update({ name }).eq('id', pid);
+          if (error) return toast(error.message, 'err');
+          refresh('Navn lagret');
+        });
+        $('.prow-file', row).addEventListener('change', async (e) => {
+          const file = e.target.files[0];
+          if (!file) return;
+          try {
+            const blob = await squareJpeg(file, 256);
+            const path = `avatars/${pid}-${Date.now()}.jpg`;
+            const up = await supabase.storage.from(BUCKET).upload(path, blob, { contentType: 'image/jpeg' });
+            if (up.error) throw up.error;
+            if (person.avatar_path) await supabase.storage.from(BUCKET).remove([person.avatar_path]);
+            const { error } = await supabase.from('people').update({ avatar_path: path }).eq('id', pid);
+            if (error) throw error;
+            refresh('Bilde lagret');
+          } catch (err) {
+            toast(`Kunne ikke laste opp: ${err.message}`, 'err');
+          }
+        });
+        $('.prow-noimg', row)?.addEventListener('click', async () => {
+          await supabase.storage.from(BUCKET).remove([person.avatar_path]);
+          const { error } = await supabase.from('people').update({ avatar_path: null }).eq('id', pid);
+          if (error) return toast(error.message, 'err');
+          refresh('Bildet er fjernet');
+        });
+        $('.prow-del', row).addEventListener('click', () =>
+          confirmDialog(`${esc(person.name)} slettes og fjernes fra alle turer og reiser.`, async () => {
+            if (person.avatar_path) await supabase.storage.from(BUCKET).remove([person.avatar_path]);
+            const { error } = await supabase.from('people').delete().eq('id', pid);
+            if (error) return toast(error.message, 'err');
+            refresh('Personen er slettet');
+          })
+        );
+      });
+    }
+  );
+}
+
+// ---------- hovedbilde ----------
+function coverTarget(type, id) {
+  if (type === 'place') {
+    const p = state.places.find((x) => x.id === id);
+    return { item: p, table: 'places', photos: p?.photoList ?? [], cover: p && placeCover(p) };
+  }
+  const t = state.trips.find((x) => x.id === id);
+  const own = t ? tripPhotos(t) : [];
+  const fromStops = t ? tripStops(t).flatMap((p) => p.photoList) : [];
+  const photos = [...new Map([...own, ...fromStops].map((ph) => [ph.id, ph])).values()];
+  return { item: t, table: 'trips', photos, cover: t && tripCover(t) };
+}
+
+async function setCover(type, id, photoId) {
+  const { table } = coverTarget(type, id);
+  const { error } = await supabase.from(table).update({ cover_photo_id: photoId }).eq('id', id);
+  if (error) return toast(`Kunne ikke lagre: ${error.message}`, 'err');
+  await loadData();
+  render();
+  toast(photoId ? 'Hovedbilde valgt' : 'Bruker første bilde som hovedbilde');
+}
+
+function coverDialog(type, id) {
+  const { item, photos, cover } = coverTarget(type, id);
+  if (!item) return;
+  openDialog(
+    `<div class="form">
+      <div class="dlg-head"><h2>Hovedbilde</h2><button type="button" class="icon-btn" data-action="close-dlg" aria-label="Lukk">${ICON.close}</button></div>
+      <p class="muted">Velg et av bildene, eller last opp et nytt. Uten valg brukes det første bildet som ble lastet opp.</p>
+      ${photos.length ? `<div class="cover-grid">${photos
+        .map((ph) => `<button type="button" class="cthumb ${cover?.id === ph.id ? 'cthumb--on' : ''}" data-photo="${ph.id}" data-thumb="${esc(ph.thumb_path)}" aria-label="Velg som hovedbilde" aria-pressed="${cover?.id === ph.id}"></button>`)
+        .join('')}</div>` : '<p class="muted">Ingen bilder ennå.</p>'}
+      <div class="dlg-actions">
+        ${item.cover_photo_id ? '<button type="button" class="btn btn--ghost" id="cv-reset">Fjern valg</button>' : ''}
+        <label class="btn btn--dark btn--file">${ICON.upload}<span class="cv-label">Last opp nytt</span><input type="file" accept="image/*,.heic,.heif" id="cv-file" /></label>
+      </div>
+    </div>`,
+    (d) => {
+      hydrateThumbs(d);
+      d.querySelectorAll('[data-photo]').forEach((b) =>
+        b.addEventListener('click', async () => {
+          closeDialog();
+          await setCover(type, id, b.dataset.photo);
+        })
+      );
+      $('#cv-reset', d)?.addEventListener('click', async () => {
+        closeDialog();
+        await setCover(type, id, null);
+      });
+      $('#cv-file', d).addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const label = e.target.closest('label');
+        label.classList.add('is-busy');
+        $('.cv-label', label).textContent = 'Laster opp …';
+        try {
+          const prepared = await processFile(file);
+          const [up] = await uploadAll([prepared], () => {});
+          if (!up.id) throw new Error(up.error ?? 'Opplasting feilet');
+          let patch;
+          if (type === 'place') {
+            const visit = item.visitsList?.[0];
+            patch = { place_id: id, visit_id: visit?.id ?? null, trip_id: visit?.trip_id ?? null };
+          } else patch = { trip_id: id };
+          await supabase.from('photos').update(patch).eq('id', up.id);
+          closeDialog();
+          await setCover(type, id, up.id);
+        } catch (err) {
+          toast(`Kunne ikke laste opp: ${err.message}`, 'err');
+        }
+      });
+    }
+  );
+}
+
+// ---------- koble turer til reise ----------
+function linkToursDialog(trip) {
+  const linked = new Set(state.visits.filter((v) => v.trip_id === trip.id).map((v) => v.place_id));
+  const visited = state.places.filter((p) => p.status === 'visited');
+  const sortKey = (p) => (p.lastVisit ?? '');
+  const tours = visited.filter((p) => p.mode === 'fjell').sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
+  const steder = visited.filter((p) => p.mode !== 'fjell').sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
+  const inRange = (d) => trip.start_date && trip.end_date && d && trip.start_date <= d && d <= trip.end_date;
+  const opt = (p) => {
+    const hint = p.visitsList.some((v) => inRange(v.visited_on)) ? '<span class="tag">I reiseperioden</span>' : '';
+    return `<label class="lt-opt"><input type="checkbox" value="${p.id}" ${linked.has(p.id) ? 'checked' : ''} />
+      <span class="thumb thumb--sm" ${placeCover(p) ? `data-thumb="${esc(placeCover(p).thumb_path)}"` : ''}>${placeCover(p) ? '' : ICON.mountain}</span>
+      <span class="row-text"><span class="row-title">${esc(p.name)}</span><span class="row-meta">${[KIND_LABEL[p.kind], fmtDate(p.lastVisit)].filter(Boolean).join(' · ')}</span></span>${hint}</label>`;
+  };
+  openDialog(
+    `<div class="form">
+      <div class="dlg-head"><h2>Turer på ${esc(trip.title)}</h2><button type="button" class="icon-btn" data-action="close-dlg" aria-label="Lukk">${ICON.close}</button></div>
+      <p class="muted">Huk av turene og stedene som hører til reisen${trip.start_date ? ` (${fmtRange(trip.start_date, trip.end_date)})` : ''}. Besøk innenfor reiseperioden kobles automatisk; ellers opprettes et nytt besøk på reisens startdato.</p>
+      <div class="lt-list">
+        ${tours.length ? `<h3 class="eyebrow">Turer</h3>${tours.map(opt).join('')}` : ''}
+        ${steder.length ? `<h3 class="eyebrow">Steder</h3>${steder.map(opt).join('')}` : ''}
+        ${!visited.length ? emptyState('Ingen turer ennå', 'Legg til turer først, så kan de kobles til reisen.') : ''}
+      </div>
+      <div class="dlg-actions"><button type="button" class="btn btn--ghost" data-action="close-dlg">Avbryt</button><button type="button" class="btn btn--dark" id="lt-save">Lagre</button></div>
+    </div>`,
+    (d) => {
+      hydrateThumbs(d);
+      $('#lt-save', d).addEventListener('click', async (e) => {
+        e.target.disabled = true;
+        const chosen = new Set([...d.querySelectorAll('.lt-opt input:checked')].map((i) => i.value));
+        try {
+          for (const placeId of chosen) {
+            if (linked.has(placeId)) continue;
+            const place = state.places.find((p) => p.id === placeId);
+            const visit =
+              place.visitsList.find((v) => !v.trip_id && inRange(v.visited_on)) ??
+              place.visitsList.find((v) => inRange(v.visited_on)) ??
+              place.visitsList.find((v) => !v.trip_id);
+            let visitId = visit?.id;
+            if (visit) {
+              const { error } = await supabase.from('visits').update({ trip_id: trip.id }).eq('id', visit.id);
+              if (error) throw error;
+            } else {
+              const { data, error } = await supabase.from('visits').insert({ place_id: placeId, trip_id: trip.id, visited_on: trip.start_date }).select('id').single();
+              if (error) throw error;
+              visitId = data.id;
+            }
+            await supabase.from('photos').update({ trip_id: trip.id }).eq('visit_id', visitId);
+          }
+          for (const placeId of linked) {
+            if (chosen.has(placeId)) continue;
+            const ids = state.visits.filter((v) => v.place_id === placeId && v.trip_id === trip.id).map((v) => v.id);
+            if (!ids.length) continue;
+            await supabase.from('visits').update({ trip_id: null }).in('id', ids);
+            await supabase.from('photos').update({ trip_id: null }).in('visit_id', ids).eq('trip_id', trip.id);
+          }
+          closeDialog();
+          await loadData();
+          render();
+          toast('Reisen er oppdatert');
+        } catch (err) {
+          e.target.disabled = false;
+          toast(`Kunne ikke lagre: ${err.message}`, 'err');
+        }
+      });
+    }
+  );
+}
+
 // ---------- lightbox ----------
 async function openPhoto(path) {
   const lb = $('#lightbox');
   const photo = state.photos.find((p) => p.storage_path === path);
   lb.hidden = false;
-  const top = `<div class="lb-bar"><button type="button" class="icon-btn lb-btn" data-action="delete-photo" data-id="${photo?.id ?? ''}" aria-label="Slett bilde" title="Slett bilde">${ICON.trash}</button><button type="button" class="icon-btn lb-btn" data-action="close-photo" aria-label="Lukk">${ICON.close}</button></div>`;
+  const sel = state.selected;
+  const canCover = photo && sel && (sel.type === 'place' ? photo.place_id === sel.id : coverTarget('trip', sel.id).photos.some((x) => x.id === photo.id));
+  const top = `<div class="lb-bar">${canCover ? `<button type="button" class="btn btn--glass" data-action="set-cover" data-id="${photo.id}">${ICON.image}Sett som hovedbilde</button>` : ''}<button type="button" class="icon-btn lb-btn" data-action="delete-photo" data-id="${photo?.id ?? ''}" aria-label="Slett bilde" title="Slett bilde">${ICON.trash}</button><button type="button" class="icon-btn lb-btn" data-action="close-photo" aria-label="Lukk">${ICON.close}</button></div>`;
   lb.innerHTML = `${top}<p>Laster …</p>`;
   const urls = await signedUrls([path]);
   const hasPos = photo && photo.lat != null && photo.lon != null;
@@ -1154,6 +1515,16 @@ document.addEventListener('click', async (e) => {
   else if (a === 'add-trip') tripForm();
   else if (a === 'edit-place') placeForm(state.places.find((p) => p.id === id));
   else if (a === 'add-visit') visitForm(state.places.find((p) => p.id === id));
+  else if (a === 'edit-visit') {
+    const v = state.visits.find((x) => x.id === id);
+    if (v) visitForm(state.places.find((p) => p.id === v.place_id), v);
+  } else if (a === 'people') peopleDialog();
+  else if (a === 'cover-pick') coverDialog(t.dataset.type, id);
+  else if (a === 'cover-reset') setCover(t.dataset.type, id, null);
+  else if (a === 'set-cover') {
+    $('#lightbox').hidden = true;
+    if (state.selected) setCover(state.selected.type, state.selected.id, id);
+  } else if (a === 'link-tours') linkToursDialog(state.trips.find((x) => x.id === id));
   else if (a === 'edit-trip') tripForm(state.trips.find((x) => x.id === id));
   else if (a === 'delete-place')
     confirmDialog('Stedet og besøkene slettes. Bildene beholdes og havner i Usortert.', async () => {

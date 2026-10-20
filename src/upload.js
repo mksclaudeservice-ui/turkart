@@ -47,6 +47,20 @@ function toJpeg(bitmap, maxPx, quality) {
   );
 }
 
+/** Kvadratisk utsnitt fra midten, brukt til profilbilder. */
+export async function squareJpeg(file, px = 256) {
+  const bitmap = await decode(file);
+  const side = Math.min(bitmap.width, bitmap.height);
+  const canvas = document.createElement('canvas');
+  canvas.width = px;
+  canvas.height = px;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, px, px);
+  bitmap.close?.();
+  return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Kunne ikke lage bilde'))), 'image/jpeg', 0.85));
+}
+
 /** Les et bilde og gjør det klart for opplasting. */
 export async function processFile(file) {
   const buffer = await file.arrayBuffer();

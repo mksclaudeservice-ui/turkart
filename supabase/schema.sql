@@ -156,3 +156,40 @@ alter table public.notes enable row level security;
 drop policy if exists "members_all" on public.notes;
 create policy "members_all" on public.notes for all to authenticated
   using (public.is_member()) with check (public.is_member());
+
+-- 10. Personer, hovedbilder ---------------------------------------------------
+create table if not exists public.people (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  avatar_path text,
+  created_at timestamptz not null default now()
+);
+create table if not exists public.visit_people (
+  visit_id uuid not null references public.visits (id) on delete cascade,
+  person_id uuid not null references public.people (id) on delete cascade,
+  primary key (visit_id, person_id)
+);
+create table if not exists public.trip_people (
+  trip_id uuid not null references public.trips (id) on delete cascade,
+  person_id uuid not null references public.people (id) on delete cascade,
+  primary key (trip_id, person_id)
+);
+alter table public.places add column if not exists cover_photo_id uuid references public.photos (id) on delete set null;
+alter table public.trips add column if not exists cover_photo_id uuid references public.photos (id) on delete set null;
+
+do $$
+declare t text;
+begin
+  foreach t in array array['people', 'visit_people', 'trip_people'] loop
+    execute format('alter table public.%I enable row level security', t);
+    execute format('drop policy if exists "members_all" on public.%I', t);
+    execute format(
+      'create policy "members_all" on public.%I for all to authenticated using (public.is_member()) with check (public.is_member())',
+      t
+    );
+  end loop;
+end $$;
+
+insert into public.people (name)
+select n from (values ('Markus Søderlind'), ('Karoline')) as v(n)
+where not exists (select 1 from public.people);
