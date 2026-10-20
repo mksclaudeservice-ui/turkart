@@ -1957,7 +1957,18 @@ function linkToursDialog(trip) {
 
 // ---------- lightbox ----------
 // Bildene i visningen som er åpen, så man kan bla mellom dem.
-const lbState = { list: [], i: 0, token: 0 };
+const lbState = {
+  list: [],
+  i: 0,
+  token: 0,
+  infoOpen: (() => {
+    try {
+      return localStorage.getItem('turkart.lbInfo') !== '0';
+    } catch {
+      return true;
+    }
+  })()
+};
 function photoListFromPage() {
   const paths = [...document.querySelectorAll('[data-action="open-photo"]')].filter((el) => !el.closest('#lightbox')).map((el) => el.dataset.path);
   return [...new Set(paths)];
@@ -1992,9 +2003,13 @@ async function openPhoto(path, { keepList = false } = {}) {
   for (const nb of neighbours) if (urls[nb]) new Image().src = urls[nb];
   const hasPos = photo && photo.lat != null && photo.lon != null;
   lb.innerHTML = `${top}${nav}<img alt="" src="${urls[path]}" />${
-    photo ? `<div class="lb-info">${photo.taken_at ? `<span>${fmtDate(photo.taken_at)}</span>` : ''}${hasPos ? `<span>${fmtCoord(photo.lat, photo.lon)}</span><div class="minimap minimap--lb"></div>` : '<span class="muted">Ingen posisjon i bildet</span>'}</div>` : ''
+    photo
+      ? lbState.infoOpen
+        ? `<div class="lb-info"><div class="lb-info-head">${photo.taken_at ? `<span>${fmtDate(photo.taken_at)}</span>` : '<span></span>'}<button type="button" class="icon-btn icon-btn--sm lb-info-close" data-action="lb-info-toggle" aria-label="Skjul kart og info" title="Skjul">${ICON.close}</button></div>${hasPos ? `<span>${fmtCoord(photo.lat, photo.lon)}</span><div class="minimap minimap--lb"></div>` : '<span class="muted">Ingen posisjon i bildet</span>'}</div>`
+        : `<button type="button" class="lb-info-open" data-action="lb-info-toggle" aria-label="Vis kart og info">${ICON.pin}<span>${photo.taken_at ? fmtDate(photo.taken_at) : 'Info'}</span></button>`
+      : ''
   }`;
-  if (!hasPos) return;
+  if (!hasPos || !lbState.infoOpen) return;
   const mm = miniMap($('.minimap--lb', lb), photo.lat, photo.lon, { zoom: 12 });
   // Har turen spor, tegn dem i minikartet så man ser hvor på turen bildet er tatt.
   const visit = state.visits.find((v) => v.id === photo.visit_id);
@@ -2135,7 +2150,13 @@ document.addEventListener('click', async (e) => {
   else if (a === 'close-dlg') closeDialog();
   else if (a === 'open-photo') openPhoto(t.dataset.path);
   else if (a === 'close-photo') $('#lightbox').hidden = true;
-  else if (a === 'photo-prev') stepPhoto(-1);
+  else if (a === 'lb-info-toggle') {
+    lbState.infoOpen = !lbState.infoOpen;
+    try {
+      localStorage.setItem('turkart.lbInfo', lbState.infoOpen ? '1' : '0');
+    } catch {}
+    openPhoto(lbState.list[lbState.i], { keepList: true });
+  } else if (a === 'photo-prev') stepPhoto(-1);
   else if (a === 'photo-next') stepPhoto(1);
   else if (a === 'delete-photo') {
     if (!id) return;

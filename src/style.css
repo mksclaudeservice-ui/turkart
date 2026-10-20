@@ -507,8 +507,8 @@ fieldset.visit-only { display: flex; flex-direction: column; gap: 10px; }
 .map-chip[aria-pressed='true'] { border-color: #d1461f; }
 .map-chip[aria-pressed='true'] svg { color: #d1461f; }
 .gcard > .field, .gcard .g-new > .field { flex: 0 0 auto; }
-/* Unngå tynne skjøter mellom kartfliser på skjermer med brøkdels pikselforhold */
-.leaflet-tile-container img.leaflet-tile { width: 256.5px !important; height: 256.5px !important; }
+/* Unngå tynne skjøter mellom kartfliser: litt overlapp, og vanlig blanding (Leaflets plus-lighter gjør overlappen lys) */
+.leaflet-container img.leaflet-tile { mix-blend-mode: normal; width: 256.5px !important; height: 256.5px !important; }
 /* Bla mellom bilder i lysbildevisningen */
 .lb-nav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 48px; height: 48px; border-radius: 50%; border: 0; display: grid; place-items: center; background: rgba(255, 255, 255, 0.15); color: #fff; cursor: pointer; }
 .lb-nav:hover { background: rgba(255, 255, 255, 0.3); }
@@ -518,3 +518,8 @@ fieldset.visit-only { display: flex; flex-direction: column; gap: 10px; }
 @media (max-width: 760px) {
   .lb-nav { width: 40px; height: 40px; background: rgba(0, 0, 0, 0.35); }
 }
+
+/* Info og minikart i bildevisningen kan skjules */
+.lb-info-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.lb-info-close { color: #fff; background: rgba(255, 255, 255, 0.12); width: 28px; height: 28px; min-height: 0; }
+.lb-info-open { position: absolute; left: 12px; bottom: max(12px, env(safe-area-inset-bottom)); display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border: 0; border-radius: 999px; background: rgba(10, 15, 13, 0.75); color: #fff; font: inherit; font-size: 13px; cursor: pointer; }
