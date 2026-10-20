@@ -141,6 +141,32 @@ const initials = (name) => {
   return ((w[0]?.[0] ?? '') + (w.length > 1 ? w[w.length - 1][0] : '')).toUpperCase() || '?';
 };
 const personById = (id) => state.people.find((p) => p.id === id);
+/** Personen som er koblet til innlogget bruker (via e-post). */
+const myPerson = () => {
+  const me = userEmail().toLowerCase();
+  return me ? state.people.find((p) => (p.emails ?? []).some((e) => e.toLowerCase() === me)) ?? null : null;
+};
+const meIds = () => (myPerson() ? [myPerson().id] : []);
+async function addPeopleToVisit(visitId, ids) {
+  if (!ids.length) return;
+  await supabase.from('visit_people').upsert(ids.map((pid) => ({ visit_id: visitId, person_id: pid })), { onConflict: 'visit_id,person_id', ignoreDuplicates: true });
+}
+function renderMe() {
+  const btn = $('.avatar');
+  if (!btn) return;
+  const me = myPerson();
+  btn.textContent = me ? initials(me.name) : userInitial();
+  btn.classList.toggle('avatar--photo', Boolean(me?.avatar_path));
+  if (me?.avatar_path) {
+    btn.dataset.thumb = me.avatar_path;
+    delete btn.dataset.loaded;
+  } else {
+    delete btn.dataset.thumb;
+    btn.style.backgroundImage = '';
+  }
+  const head = $('.user-menu-head b');
+  if (head) head.textContent = me ? `${me.name} (${userEmail()})` : userEmail();
+}
 function personAvatar(p, size = 'sm') {
   return `<span class="pav pav--${size}" title="${esc(p.name)}" ${p.avatar_path ? `data-thumb="${esc(p.avatar_path)}"` : ''}>${esc(initials(p.name))}</span>`;
 }
@@ -278,6 +304,7 @@ function render({ fit = false } = {}) {
   const unsorted = state.photos.filter((p) => !p.place_id && !p.trip_id).length;
   $('#inbox-count').textContent = unsorted || '';
   $('#notes-count').textContent = state.notes.filter((n) => !n.done).length || '';
+  renderMe();
   $('#side').innerHTML = state.mode === 'fjell' ? sideFjell() : sideReise();
   const places = visiblePlaces();
   const routes =
@@ -688,7 +715,7 @@ function visitForm(place, existing = null) {
         <label class="field"><span>Dato</span><input id="vf-date" type="date" value="${v0.visited_on ?? ''}" /></label>
         <label class="field"><span>Del av reise</span><select id="vf-trip">${tripOptions(v0.trip_id)}</select></label>
       </div>
-      ${peoplePicker('vf-people', v0.people ?? [])}
+      ${peoplePicker('vf-people', existing ? v0.people ?? [] : meIds())}
       <div class="field-row">
         <label class="field"><span>Lengde (km)</span><input id="vf-km" inputmode="decimal" value="${v0.distance_km ?? ''}" /></label>
         <label class="field"><span>Høydemeter</span><input id="vf-hm" type="number" inputmode="numeric" value="${v0.ascent_m ?? ''}" /></label>
@@ -761,7 +788,7 @@ function tripForm(existing = null) {
         <label class="field"><span>Status</span><select id="tf-status"><option value="done" ${t.status === 'done' ? 'selected' : ''}>Reist</option><option value="wish" ${t.status === 'wish' ? 'selected' : ''}>Ønsker</option></select></label>
       </div>
       <label class="field"><span>Land (kommaseparert)</span><input id="tf-countries" placeholder="Norge, Portugal" value="${esc(t.countries.join(', '))}" /></label>
-      ${peoplePicker('tf-people', t.people ?? [])}
+      ${peoplePicker('tf-people', existing ? t.people ?? [] : meIds())}
       <label class="field"><span>Notat</span><textarea id="tf-notes" rows="3">${esc(t.notes ?? '')}</textarea></label>
       <div class="dlg-actions"><button type="button" class="btn btn--ghost" data-action="close-dlg">Avbryt</button><button type="submit" class="btn btn--dark">Lagre</button></div>
     </form>`,
@@ -1065,6 +1092,7 @@ async function saveGroups(groups, d) {
         if (error) throw error;
         visit = data;
         state.visits.push(data);
+        await addPeopleToVisit(data.id, meIds());
       }
       await supabase.from('places').update({ status: 'visited' }).eq('id', placeId).eq('status', 'wish');
       const ids = g.items.map((it) => it.id);
@@ -1236,12 +1264,15 @@ function peopleDialog() {
   openDialog(
     `<div class="form">
       <div class="dlg-head"><h2>Personer</h2><button type="button" class="icon-btn" data-action="close-dlg" aria-label="Lukk">${ICON.close}</button></div>
-      <p class="muted">Personer kan kobles til besøk og reiser. Uten bilde vises initialene.</p>
+      <p class="muted">Personer kan kobles til besøk og reiser. Uten bilde vises initialene. Legg inn e-posten personen logger inn med, så blir hen valgt automatisk på nye besøk og reiser.</p>
       <ul class="plist">${state.people
         .map(
           (p) => `<li class="prow" data-id="${p.id}">
           ${personAvatar(p, 'md')}
-          <input class="prow-name" value="${esc(p.name)}" aria-label="Navn" />
+          <div class="prow-main">
+            <div class="prow-title"><input class="prow-name" value="${esc(p.name)}" aria-label="Navn" />${myPerson()?.id === p.id ? '<span class="tag">Deg</span>' : ''}</div>
+            <input class="prow-emails" value="${esc((p.emails ?? []).join(', '))}" placeholder="E-post for innlogging (valgfritt)" aria-label="E-post for innlogging, kommaseparert" />
+          </div>
           <div class="prow-actions">
             <label class="btn btn--ghost btn--file btn--sm">${p.avatar_path ? 'Bytt bilde' : 'Last opp bilde'}<input type="file" accept="image/*,.heic,.heif" class="prow-file" /></label>
             ${p.avatar_path ? '<button type="button" class="btn btn--ghost btn--sm prow-noimg">Fjern bilde</button>' : ''}
@@ -1278,6 +1309,12 @@ function peopleDialog() {
           const { error } = await supabase.from('people').update({ name }).eq('id', pid);
           if (error) return toast(error.message, 'err');
           refresh('Navn lagret');
+        });
+        $('.prow-emails', row).addEventListener('change', async (e) => {
+          const emails = e.target.value.split(/[,\s]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
+          const { error } = await supabase.from('people').update({ emails }).eq('id', pid);
+          if (error) return toast(error.message, 'err');
+          refresh('Innlogging koblet');
         });
         $('.prow-file', row).addEventListener('change', async (e) => {
           const file = e.target.files[0];
@@ -1435,6 +1472,7 @@ function linkToursDialog(trip) {
               const { data, error } = await supabase.from('visits').insert({ place_id: placeId, trip_id: trip.id, visited_on: trip.start_date }).select('id').single();
               if (error) throw error;
               visitId = data.id;
+              await addPeopleToVisit(visitId, trip.people?.length ? trip.people : meIds());
             }
             await supabase.from('photos').update({ trip_id: trip.id }).eq('visit_id', visitId);
           }

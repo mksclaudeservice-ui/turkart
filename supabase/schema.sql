@@ -193,3 +193,10 @@ end $$;
 insert into public.people (name)
 select n from (values ('Markus Søderlind'), ('Karoline')) as v(n)
 where not exists (select 1 from public.people);
+
+-- 11. Personer koblet til innlogging -------------------------------------------
+alter table public.people add column if not exists emails text[] not null default '{}';
+update public.people set emails = array['admin1@example.com', 'admin2@example.com']
+  where name = 'Markus Søderlind' and emails = '{}';
+update public.people set emails = array['medlem@example.com']
+  where name = 'Karoline' and emails = '{}';
