@@ -180,6 +180,11 @@ export class TurMap {
     }
   }
 
+  setPinsVisible(on) {
+    if (on && !this.map.hasLayer(this.markers)) this.markers.addTo(this.map);
+    if (!on && this.map.hasLayer(this.markers)) this.map.removeLayer(this.markers);
+  }
+
   showAllTracks(lines) {
     this.clearAllTracks();
     if (lines.length) this.allTracks = drawLines(this.map, lines, { color: '#d1461f', weight: 3 });

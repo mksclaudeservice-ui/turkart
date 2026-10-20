@@ -84,6 +84,13 @@ const state = {
       return false;
     }
   })(),
+  showPins: (() => {
+    try {
+      return localStorage.getItem('turkart.showPins') !== '0';
+    } catch {
+      return true;
+    }
+  })(),
   visitPeople: [],
   tracks: [],
   trackPoints: new Map(),
@@ -373,6 +380,7 @@ function renderShell() {
         <div class="map-tools">
           <button type="button" class="side-toggle" data-action="side-open" aria-controls="side" aria-expanded="false">${ICON.list}<span id="side-toggle-label">Turer</span></button>
           <button type="button" class="map-chip" data-action="toggle-tracks" aria-pressed="${state.showAllTracks}" title="Vis spor for alle turer på kartet">${ICON.route}<span>Spor</span></button>
+          <button type="button" class="map-chip" data-action="toggle-pins" aria-pressed="${state.showPins}" title="Vis eller skjul nålene på kartet">${ICON.pin}<span>Nåler</span></button>
         </div>
         <div class="pick-banner" id="pick-banner" hidden>Klikk i kartet for å plassere stedet <button type="button" class="btn btn--link" data-action="cancel-pick">Avbryt</button></div>
         <section class="detail" id="detail" hidden aria-live="polite"></section>
@@ -425,6 +433,8 @@ function render({ fit = false } = {}) {
     p.pinPos = c ? focusPos(c) : '50% 50%';
   }
   state.map.render(places, { selectedId: state.selected?.type === 'place' ? state.selected.id : null, routes });
+  state.map.setPinsVisible(state.showPins);
+  $('[data-action="toggle-pins"]')?.setAttribute('aria-pressed', String(state.showPins));
   hydrateThumbs($('#map'));
   renderAllTracks(places);
   if (fit) state.map.fitTo(places);
@@ -1999,6 +2009,24 @@ document.addEventListener('click', async (e) => {
     } catch {}
     renderAllTracks(visiblePlaces());
     toast(state.showAllTracks ? 'Viser spor for alle turer' : 'Viser spor bare for åpen tur');
+    return;
+  }
+  if (a === 'toggle-pins') {
+    state.showPins = !state.showPins;
+    try {
+      localStorage.setItem('turkart.showPins', state.showPins ? '1' : '0');
+    } catch {}
+    state.map.setPinsVisible(state.showPins);
+    t.setAttribute('aria-pressed', String(state.showPins));
+    // Uten nåler er det sporene man vil se, så slå dem på samtidig.
+    if (!state.showPins && !state.showAllTracks) {
+      state.showAllTracks = true;
+      try {
+        localStorage.setItem('turkart.showTracks', '1');
+      } catch {}
+      renderAllTracks(visiblePlaces());
+      toast('Nålene er skjult, og spor for alle turer vises');
+    } else toast(state.showPins ? 'Viser nåler' : 'Nålene er skjult');
     return;
   }
   if (a === 'side-open') return setSide(true);
