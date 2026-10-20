@@ -180,6 +180,17 @@ export class TurMap {
     }
   }
 
+  showAllTracks(lines) {
+    this.clearAllTracks();
+    if (lines.length) this.allTracks = drawLines(this.map, lines, { color: '#d1461f', weight: 3 });
+    this.tracks?.eachLayer((l) => l.bringToFront?.());
+  }
+
+  clearAllTracks() {
+    if (this.allTracks) this.map.removeLayer(this.allTracks);
+    this.allTracks = null;
+  }
+
   showTracks(lines, { fit = false } = {}) {
     this.clearTracks();
     if (lines.length) this.tracks = drawLines(this.map, lines, { fit });

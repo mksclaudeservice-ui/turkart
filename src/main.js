@@ -77,6 +77,13 @@ const state = {
   notes: [],
   notesFilter: 'open',
   people: [],
+  showAllTracks: (() => {
+    try {
+      return localStorage.getItem('turkart.showTracks') === '1';
+    } catch {
+      return false;
+    }
+  })(),
   visitPeople: [],
   tracks: [],
   trackPoints: new Map(),
@@ -348,7 +355,10 @@ function renderShell() {
       <div class="side-backdrop" data-action="side-close"></div>
       <main class="mapwrap">
         <div id="map" aria-label="Kart"></div>
-        <button type="button" class="side-toggle" data-action="side-open" aria-controls="side" aria-expanded="false">${ICON.list}<span id="side-toggle-label">Turer</span></button>
+        <div class="map-tools">
+          <button type="button" class="side-toggle" data-action="side-open" aria-controls="side" aria-expanded="false">${ICON.list}<span id="side-toggle-label">Turer</span></button>
+          <button type="button" class="map-chip" data-action="toggle-tracks" aria-pressed="${state.showAllTracks}" title="Vis spor for alle turer på kartet">${ICON.route}<span>Spor</span></button>
+        </div>
         <div class="pick-banner" id="pick-banner" hidden>Klikk i kartet for å plassere stedet <button type="button" class="btn btn--link" data-action="cancel-pick">Avbryt</button></div>
         <section class="detail" id="detail" hidden aria-live="polite"></section>
       </main>
@@ -401,6 +411,7 @@ function render({ fit = false } = {}) {
   }
   state.map.render(places, { selectedId: state.selected?.type === 'place' ? state.selected.id : null, routes });
   hydrateThumbs($('#map'));
+  renderAllTracks(places);
   if (fit) state.map.fitTo(places);
   renderDetail();
 }
@@ -539,6 +550,21 @@ function select(type, id) {
   } else {
     const stops = tripStops(state.trips.find((t) => t.id === id) ?? {});
     if (stops.length) state.map.fitTo(stops);
+  }
+}
+
+/** Vis spor for alle synlige turer når bryteren er på. */
+async function renderAllTracks(places) {
+  $('[data-action="toggle-tracks"]')?.setAttribute('aria-pressed', String(state.showAllTracks));
+  if (!state.showAllTracks) return state.map.clearAllTracks();
+  const ids = new Set(places.map((p) => p.id));
+  const trackIds = state.visits.filter((v) => ids.has(v.place_id)).flatMap((v) => (v.tracks ?? []).map((t) => t.id));
+  if (!trackIds.length) return state.map.clearAllTracks();
+  try {
+    const lines = await trackPointsFor(trackIds);
+    if (state.showAllTracks) state.map.showAllTracks(lines);
+  } catch (err) {
+    console.warn(err);
   }
 }
 
@@ -1916,6 +1942,15 @@ document.addEventListener('click', async (e) => {
       const tr = state.trips.find((x) => x.id === id);
       if (tr) state.map.fitTo(tripStops(tr));
     }
+    return;
+  }
+  if (a === 'toggle-tracks') {
+    state.showAllTracks = !state.showAllTracks;
+    try {
+      localStorage.setItem('turkart.showTracks', state.showAllTracks ? '1' : '0');
+    } catch {}
+    renderAllTracks(visiblePlaces());
+    toast(state.showAllTracks ? 'Viser spor for alle turer' : 'Viser spor bare for åpen tur');
     return;
   }
   if (a === 'side-open') return setSide(true);

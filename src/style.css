@@ -495,3 +495,14 @@ fieldset.visit-only { display: flex; flex-direction: column; gap: 10px; }
 .vf-tracks .btn--file { align-self: flex-start; }
 .howto summary { cursor: pointer; font-weight: 600; color: var(--ink); }
 .howto ul { margin: 6px 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+
+/* Kartverktøy oppe til venstre */
+.map-tools { position: absolute; z-index: 900; left: max(12px, env(safe-area-inset-left)); top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+.map-tools .side-toggle { position: static; }
+.map-chip {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 14px 0 12px; border: 2px solid transparent;
+  border-radius: 999px; background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: var(--shadow); cursor: pointer;
+}
+.map-chip svg { color: var(--muted); }
+.map-chip[aria-pressed='true'] { border-color: #d1461f; }
+.map-chip[aria-pressed='true'] svg { color: #d1461f; }
