@@ -421,3 +421,4 @@ progress { width: 100%; height: 10px; accent-color: var(--fjell); }
 .detail-map-wrap { flex-direction: column; gap: 8px; margin: 8px 0 4px; }
 .detail-map { height: 170px; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); background: var(--bg); }
 .detail-map-btn { align-self: stretch; }
+@media (max-width: 760px) { .mobile-only { display: flex !important; } }
