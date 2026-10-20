@@ -54,11 +54,14 @@ export function miniMap(el, lat, lon, { zoom = 11, color = '#2F5D50' } = {}) {
   marker.getElement()?.style.setProperty('background', color);
   map.setView([lat, lon], zoom);
   setTimeout(() => map.invalidateSize(), 50);
-  return (la, lo) => {
+  const move = (la, lo) => {
     marker.setLatLng([la, lo]);
     map.setView([la, lo], zoom);
     setTimeout(() => map.invalidateSize(), 50);
   };
+  move.map = map;
+  move.marker = marker;
+  return move;
 }
 
 /** Lite kart med flere nåler, tilpasset slik at alle vises. */

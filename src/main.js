@@ -1994,7 +1994,22 @@ async function openPhoto(path, { keepList = false } = {}) {
   lb.innerHTML = `${top}${nav}<img alt="" src="${urls[path]}" />${
     photo ? `<div class="lb-info">${photo.taken_at ? `<span>${fmtDate(photo.taken_at)}</span>` : ''}${hasPos ? `<span>${fmtCoord(photo.lat, photo.lon)}</span><div class="minimap minimap--lb"></div>` : '<span class="muted">Ingen posisjon i bildet</span>'}</div>` : ''
   }`;
-  if (hasPos) miniMap($('.minimap--lb', lb), photo.lat, photo.lon, { zoom: 12 });
+  if (!hasPos) return;
+  const mm = miniMap($('.minimap--lb', lb), photo.lat, photo.lon, { zoom: 12 });
+  // Har turen spor, tegn dem i minikartet så man ser hvor på turen bildet er tatt.
+  const visit = state.visits.find((v) => v.id === photo.visit_id);
+  const ids = (visit?.tracks ?? []).map((t) => t.id);
+  if (!ids.length) return;
+  try {
+    const lines = await trackPointsFor(ids);
+    if (token !== lbState.token || !lines.length) return;
+    drawLines(mm.map, lines, { weight: 3 });
+    mm.marker.setZIndexOffset(1000);
+    const all = lines.flat().map((q) => [q[0], q[1]]).concat([[photo.lat, photo.lon]]);
+    mm.map.fitBounds(all, { padding: [12, 12], maxZoom: 14 });
+  } catch (err) {
+    console.warn(err);
+  }
 }
 
 // ---------- events ----------
