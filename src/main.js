@@ -392,6 +392,7 @@ function renderShell() {
   <div class="lightbox" id="lightbox" hidden></div>`;
   state.map = new TurMap($('#map'), {
     onPlaceClick: (p) => select('place', p.id),
+    onPinShown: (el) => hydrateThumbs(el),
     onMapClick: (ll) => {
       if (state.picking) {
         const cb = state.picking;

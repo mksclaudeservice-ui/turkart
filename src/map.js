@@ -120,7 +120,7 @@ export function miniMapTrack(el, points, { color = '#d1461f', lines = null } = {
 }
 
 export class TurMap {
-  constructor(el, { onPlaceClick, onMapClick }) {
+  constructor(el, { onPlaceClick, onMapClick, onPinShown }) {
     this.map = L.map(el, { zoomControl: false, worldCopyJump: true }).setView([64.5, 12], 5);
     L.control.zoom({ position: 'bottomright' }).addTo(this.map);
     this.layers = Object.fromEntries(Object.entries(LAYERS).map(([k, v]) => [k, v.layer()]));
@@ -140,6 +140,7 @@ export class TurMap {
     this.routes = L.layerGroup().addTo(this.map);
     this.tracks = null;
     this.onPlaceClick = onPlaceClick;
+    this.onPinShown = onPinShown;
     this.map.on('click', (e) => onMapClick?.(e.latlng));
   }
 
@@ -176,6 +177,8 @@ export class TurMap {
       }
       L.marker([p.lat, p.lon], { icon, title: p.name, keyboard: true, riseOnHover: true })
         .on('click', () => this.onPlaceClick?.(p))
+        // Leaflet lager nålen på nytt hver gang den vises, så bildet må hentes inn igjen.
+        .on('add', (e) => { const el = e.target.getElement(); if (el) this.onPinShown?.(el); })
         .addTo(this.markers);
     }
   }
