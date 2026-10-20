@@ -56,6 +56,8 @@ const ICON = {
   users: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.4 3.2-5.5 6.5-5.5s5.9 2.1 6.5 5.5"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18.5 14.8c1.7.8 2.8 2.6 3 5.2"/></svg>',
   image: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>',
   link: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>',
+  list: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>',
+  chevronLeft: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>',
   trash: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>',
   close: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>'
 };
@@ -273,9 +275,11 @@ function renderShell() {
       </div>
     </header>
     <div class="body">
-      <aside class="side" id="side"></aside>
+      <aside class="side" id="side" aria-label="Turer og reiser"></aside>
+      <div class="side-backdrop" data-action="side-close"></div>
       <main class="mapwrap">
         <div id="map" aria-label="Kart"></div>
+        <button type="button" class="side-toggle" data-action="side-open" aria-controls="side" aria-expanded="false">${ICON.list}<span id="side-toggle-label">Turer</span></button>
         <div class="pick-banner" id="pick-banner" hidden>Klikk i kartet for å plassere stedet <button type="button" class="btn btn--link" data-action="cancel-pick">Avbryt</button></div>
         <section class="detail" id="detail" hidden aria-live="polite"></section>
       </main>
@@ -295,6 +299,13 @@ function renderShell() {
     }
   });
   state.map.setMode(state.mode);
+  const header = $('.top');
+  const setTop = () => document.documentElement.style.setProperty('--top-h', `${header.getBoundingClientRect().height}px`);
+  setTop();
+  new ResizeObserver(() => {
+    setTop();
+    state.map.invalidate();
+  }).observe(header);
 }
 
 function render({ fit = false } = {}) {
@@ -305,7 +316,10 @@ function render({ fit = false } = {}) {
   $('#inbox-count').textContent = unsorted || '';
   $('#notes-count').textContent = state.notes.filter((n) => !n.done).length || '';
   renderMe();
-  $('#side').innerHTML = state.mode === 'fjell' ? sideFjell() : sideReise();
+  const count = state.mode === 'fjell' ? visiblePlaces().length : visibleTrips().length + visiblePlaces().filter((p) => p.status === 'wish').length;
+  const label = state.mode === 'fjell' ? 'Turer' : 'Reiser';
+  $('#side').innerHTML = `<div class="side-head"><h2>${label}</h2><button type="button" class="icon-btn" data-action="side-close" aria-label="Lukk liste">${ICON.chevronLeft}</button></div>${state.mode === 'fjell' ? sideFjell() : sideReise()}`;
+  $('#side-toggle-label').textContent = `${label}${count ? ` (${count})` : ''}`;
   const places = visiblePlaces();
   const routes =
     state.mode === 'reise'
@@ -315,6 +329,12 @@ function render({ fit = false } = {}) {
   if (fit) state.map.fitTo(places);
   renderDetail();
 }
+
+function setSide(open) {
+  $('.shell')?.classList.toggle('side-open', open);
+  $('.side-toggle')?.setAttribute('aria-expanded', String(open));
+}
+const isMobile = () => window.matchMedia('(max-width: 760px)').matches;
 
 function filterChips() {
   const f = (k, label, dot) =>
@@ -1588,6 +1608,9 @@ document.addEventListener('click', async (e) => {
     return;
   }
   const id = t.dataset.id;
+  if (a === 'side-open') return setSide(true);
+  if (a === 'side-close') return setSide(false);
+  if (isMobile() && (a === 'select-place' || a === 'select-trip') && t.closest('.side')) setSide(false);
   if (a === 'mode') {
     state.mode = t.dataset.mode;
     state.selected = null;
