@@ -1,11 +1,12 @@
 # Turkart – notater for Claude
 
-Privat kart over toppturer og reiser for Markus og Karoline. Vite + vanilla JS + Leaflet, Supabase som backend, Netlify som hosting.
+Privat kart over toppturer og reiser for Markus og Karoline. Vite + vanilla JS + Leaflet, Supabase som backend, GitHub Pages som hosting.
 
 ## Deploy
-- Push til `main` → Netlify bygger og publiserer automatisk (`netlify.toml`).
-- Live: https://amazing-douhua-ff1a85.netlify.app
-- Ikke lag zip-filer lenger; push er hele deployen.
+- Push til `main` → GitHub Actions (`.github/workflows/deploy.yml`) bygger og publiserer til GitHub Pages.
+- Live: https://mksclaudeservice-ui.github.io/turkart/
+- Netlify (amazing-douhua-ff1a85) er ikke lenger i bruk: gratiskredittene tok slutt.
+- Samle gjerne flere endringer per push.
 
 ## Supabase
 - Prosjekt-ref: `wucaivamwrnuvczrvios` (org «mksclaudeservice's Org»), region Europa.
@@ -16,8 +17,8 @@ Privat kart over toppturer og reiser for Markus og Karoline. Vite + vanilla JS +
 - Tabeller: places, visits, trips, photos, notes, allowed_users. Bildebøtte: `photos` (privat).
 
 ## Brukere
-- Admin: admin1@example.com, admin2@example.com (se `ADMIN_EMAILS` i `src/main.js`).
-- Medlem: medlem@example.com.
+- E-postadresser skal ikke ligge i koden eller repoet. De ligger i `allowed_users` (tilgang, `is_admin`)
+  og `people.emails` (kobling person ↔ innlogging). Endres i SQL Editor eller i appen.
 
 ## Konvensjoner
 - All UI-tekst på norsk bokmål.

@@ -7,10 +7,8 @@ create table if not exists public.allowed_users (
   email text primary key
 );
 
--- Bytt ut med deres to e-postadresser før du kjører:
-insert into public.allowed_users (email) values
-  ('admin1@example.com')
-on conflict do nothing;
+-- E-postadressene ligger bare i databasen, ikke i koden. Legg til brukere i SQL Editor:
+--   insert into public.allowed_users (email) values ('navn@example.com') on conflict do nothing;
 
 create or replace function public.is_member()
 returns boolean
@@ -196,10 +194,8 @@ where not exists (select 1 from public.people);
 
 -- 11. Personer koblet til innlogging -------------------------------------------
 alter table public.people add column if not exists emails text[] not null default '{}';
-update public.people set emails = array['admin1@example.com', 'admin2@example.com']
-  where name = 'Markus Søderlind' and emails = '{}';
-update public.people set emails = array['medlem@example.com']
-  where name = 'Karoline' and emails = '{}';
+-- Kobles i appen (Personer) eller i SQL Editor:
+--   update public.people set emails = array['navn@example.com'] where name = '...';
 
 -- 12. Midtpunkt for bildeutsnitt (prosent, null = midten) ------------------------
 alter table public.photos add column if not exists focus_x real;
@@ -225,3 +221,7 @@ alter table public.tracks enable row level security;
 drop policy if exists "members_all" on public.tracks;
 create policy "members_all" on public.tracks for all to authenticated
   using (public.is_member()) with check (public.is_member());
+
+-- 14. Admin-flagg (erstatter e-postliste i koden) ------------------------------
+alter table public.allowed_users add column if not exists is_admin boolean not null default false;
+-- Sett admin i SQL Editor:  update public.allowed_users set is_admin = true where email = 'navn@example.com';

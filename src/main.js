@@ -112,7 +112,7 @@ function toast(msg, kind = 'ok') {
 
 // ---------- data ----------
 async function loadData() {
-  const [p, v, t, ph, pe, vp, tp, tr] = await Promise.all([
+  const [p, v, t, ph, pe, vp, tp, tr, me] = await Promise.all([
     supabase.from('places').select('*').order('created_at'),
     supabase.from('visits').select('*').order('visited_on', { ascending: false }),
     supabase.from('trips').select('*').order('start_date', { ascending: false }),
@@ -120,8 +120,12 @@ async function loadData() {
     supabase.from('people').select('*').order('created_at'),
     supabase.from('visit_people').select('*'),
     supabase.from('trip_people').select('*'),
-    supabase.from('tracks').select('id,visit_id,source,original_name,started_at,duration_min,distance_km,ascent_m,max_ele')
+    supabase.from('tracks').select('id,visit_id,source,original_name,started_at,duration_min,distance_km,ascent_m,max_ele'),
+    supabase.from('allowed_users').select('is_admin').ilike('email', userEmail()).maybeSingle()
   ]);
+  state.isAdmin = Boolean(me?.data?.is_admin);
+  const adm = $('.user-menu-admin');
+  if (adm) adm.hidden = !state.isAdmin;
   for (const r of [p, v, t, ph]) if (r.error) throw r.error;
   state.places = p.data;
   state.visits = v.data;
@@ -335,10 +339,10 @@ function tripStops(trip) {
 // ---------- rendering ----------
 const userEmail = () => state.session?.user?.email ?? '';
 const userInitial = () => (userEmail()[0] ?? '?').toUpperCase();
-const ADMIN_EMAILS = ['admin1@example.com', 'admin2@example.com'];
-const isAdmin = () => ADMIN_EMAILS.includes(userEmail().toLowerCase());
+// Admin styres av kolonnen is_admin i allowed_users (ingen e-postadresser i koden).
+const isAdmin = () => Boolean(state.isAdmin);
 const ADMIN = {
-  deploy: 'https://app.netlify.com/projects/amazing-douhua-ff1a85/deploys',
+  deploy: 'https://github.com/mksclaudeservice-ui/turkart/actions',
   db: 'https://supabase.com/dashboard/project/wucaivamwrnuvczrvios/editor',
   auth: 'https://supabase.com/dashboard/project/wucaivamwrnuvczrvios/auth/users'
 };
@@ -361,12 +365,12 @@ function renderShell() {
           <button type="button" class="avatar" data-action="user-menu" aria-haspopup="true" aria-expanded="false" aria-label="Innlogget som ${esc(userEmail())}" title="${esc(userEmail())}">${esc(userInitial())}</button>
           <div class="user-menu" id="user-menu" hidden>
             <div class="user-menu-head"><span class="muted">Innlogget som</span><b>${esc(userEmail())}</b></div>
-            ${isAdmin() ? `<div class="user-menu-admin">
+            <div class="user-menu-admin" ${isAdmin() ? '' : 'hidden'}>
               <span class="eyebrow">Admin</span>
-              <a class="menu-link" href="${ADMIN.deploy}" target="_blank" rel="noopener">${ICON.upload}<span>Publiser ny versjon<small>Netlify · dra inn zip-fil</small></span></a>
+              <a class="menu-link" href="${ADMIN.deploy}" target="_blank" rel="noopener">${ICON.upload}<span>Publiseringer<small>GitHub Actions</small></span></a>
               <a class="menu-link" href="${ADMIN.db}" target="_blank" rel="noopener">${ICON.inbox}<span>Database og brukere<small>Supabase</small></span></a>
               <a class="menu-link" href="${ADMIN.auth}" target="_blank" rel="noopener">${ICON.plane}<span>Innlogging og tilgang<small>Supabase Auth</small></span></a>
-            </div>` : ''}
+            </div>
             <button type="button" class="menu-link menu-link--btn" data-action="people">${ICON.users}<span>Personer<small>Navn og profilbilder</small></span></button>
             <button type="button" class="btn btn--ghost" data-action="signout">Logg ut</button>
           </div>
@@ -2225,7 +2229,7 @@ function loginView(msg = '') {
     const email = $('#login-email').value.trim();
     const btn = e.target.querySelector('button');
     btn.disabled = true;
-    const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin } });
+    const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin + import.meta.env.BASE_URL } });
     btn.disabled = false;
     $('.login-msg').textContent = error
       ? `Kunne ikke sende lenke: ${error.message}`
