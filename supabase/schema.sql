@@ -225,3 +225,21 @@ create policy "members_all" on public.tracks for all to authenticated
 -- 14. Admin-flagg (erstatter e-postliste i koden) ------------------------------
 alter table public.allowed_users add column if not exists is_admin boolean not null default false;
 -- Sett admin i SQL Editor:  update public.allowed_users set is_admin = true where email = 'navn@example.com';
+
+-- 15. Etapper mellom stopp på en reise (transport og ferdig beregnet rute) ------
+create table if not exists public.trip_legs (
+  id uuid primary key default gen_random_uuid(),
+  trip_id uuid not null references public.trips(id) on delete cascade,
+  from_place uuid not null references public.places(id) on delete cascade,
+  to_place uuid not null references public.places(id) on delete cascade,
+  mode text not null default 'bil' check (mode in ('bil','fly','ferje','tog','sykkel','gange')),
+  points jsonb,
+  distance_km real,
+  duration_min integer,
+  routed boolean not null default false,
+  created_at timestamptz not null default now(),
+  unique (trip_id, from_place, to_place)
+);
+alter table public.trip_legs enable row level security;
+drop policy if exists "members_all" on public.trip_legs;
+create policy "members_all" on public.trip_legs for all to authenticated using (public.is_member()) with check (public.is_member());

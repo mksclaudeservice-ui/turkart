@@ -104,6 +104,77 @@ export function drawLines(map, lines, { color = '#d1461f', weight = 4, fit = fal
   return group;
 }
 
+/** Reiserute: nummererte stopp i rekkefølge, heltrukket linje med retningspiler. Returnerer laget. */
+const LEG_STYLE = {
+  bil: { weight: 3.5 },
+  sykkel: { weight: 3 },
+  gange: { weight: 3 },
+  tog: { weight: 3, dashArray: '10 6' },
+  ferje: { weight: 3, dashArray: '2 8' },
+  fly: { weight: 2.5, dashArray: '7 7' }
+};
+
+export function tripLayer(map, stops, { activeId = null, color = '#2B5C8A', legs = [], onStopClick, onPinShown } = {}) {
+  const group = L.layerGroup().addTo(map);
+  for (let i = 1; i < stops.length; i++) {
+    const leg = legs[i - 1];
+    const pts = leg?.points?.length > 1 ? leg.points : [[stops[i - 1].lat, stops[i - 1].lon], [stops[i].lat, stops[i].lon]];
+    const st = LEG_STYLE[leg?.mode] ?? LEG_STYLE.bil;
+    // Mens ruten beregnes vises en svak, rett linje.
+    const pending = !leg?.points;
+    L.polyline(pts, { color: '#fff', weight: st.weight + 3.5, opacity: pending ? 0.5 : 0.9, interactive: false, lineJoin: 'round', lineCap: 'round' }).addTo(group);
+    L.polyline(pts, { color, weight: st.weight, dashArray: pending ? '2 6' : st.dashArray, opacity: pending ? 0.5 : 1, interactive: false, lineJoin: 'round', lineCap: 'round' }).addTo(group);
+    // Pil midt på etappen som viser reiseretningen (Mercator er vinkeltro, så vinkelen holder ved zoom).
+    const k = Math.floor((pts.length - 1) / 2);
+    const p0 = pts[k];
+    const p1 = pts[Math.min(k + 1, pts.length - 1)];
+    const a = L.Projection.SphericalMercator.project(L.latLng(p0));
+    const b = L.Projection.SphericalMercator.project(L.latLng(p1));
+    if (a.distanceTo(b) < 0.01) continue;
+    const deg = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
+    const mid = pts.length > 2 ? L.latLng(p0) : L.latLng((p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2);
+    const html = `<svg viewBox="0 0 16 16" width="16" height="16" style="transform:rotate(${-deg}deg)" aria-hidden="true"><path d="M5 3l6 5-6 5" fill="none" stroke="${color}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    L.marker(mid, { icon: L.divIcon({ className: 'trip-arrow', html, iconSize: [16, 16], iconAnchor: [8, 8] }), interactive: false, keyboard: false }).addTo(group);
+  }
+  for (const s of stops) {
+    const on = s.id === activeId;
+    const html = on
+      ? `<span class="pin-num-photo" ${s.thumb ? `data-thumb="${s.thumb}" style="background-position:${s.pos ?? '50% 50%'}"` : ''}></span><span class="pin-num-badge">${s.n}</span><span class="pin-num-label">${s.label}</span>`
+      : `${s.n}`;
+    const size = on ? 56 : 30;
+    const icon = L.divIcon({ className: `pin-num ${on ? 'pin-num--on' : ''}`, html, iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
+    L.marker([s.lat, s.lon], { icon, title: `${s.n}. ${s.name}`, keyboard: true, zIndexOffset: on ? 1000 : 0 })
+      .on('click', () => onStopClick?.(s.id))
+      .on('add', (e) => { const el = e.target.getElement(); if (el) onPinShown?.(el); })
+      .addTo(group);
+  }
+  return group;
+}
+
+/** Lite kart som viser en reiserute. Returnerer kartet; tegn om med .redraw(activeId). */
+export function miniMapTrip(el, stops, opts = {}) {
+  const map = L.map(el, {
+    zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false,
+    doubleClickZoom: false, boxZoom: false, keyboard: false, touchZoom: false, tap: false
+  });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, opacity: 0.6 }).addTo(map);
+  L.tileLayer('https://cache.kartverket.no/v1/wmts/1.0.0/topo/default/webmercator/{z}/{y}/{x}.png', { maxZoom: 18 }).addTo(map);
+  let layer = tripLayer(map, stops, opts);
+  map.redraw = (activeId, legs = opts.legs) => {
+    map.removeLayer(layer);
+    opts = { ...opts, activeId, legs };
+    layer = tripLayer(map, stops, opts);
+  };
+  const fit = () => {
+    map.invalidateSize();
+    if (stops.length === 1) map.setView([stops[0].lat, stops[0].lon], 10);
+    else if (stops.length) map.fitBounds(L.latLngBounds(stops.map((s) => [s.lat, s.lon])).pad(0.25), { maxZoom: 11 });
+  };
+  fit();
+  setTimeout(fit, 60);
+  return map;
+}
+
 /** Lite, statisk kart som viser et spor. */
 export function miniMapTrack(el, points, { color = '#d1461f', lines = null } = {}) {
   const map = L.map(el, {
@@ -184,6 +255,16 @@ export class TurMap {
         .on('add', (e) => { const el = e.target.getElement(); if (el) this.onPinShown?.(el); })
         .addTo(this.markers);
     }
+  }
+
+  showTrip(stops, { activeId = null, legs = [], onStopClick } = {}) {
+    this.clearTrip();
+    this.trip = tripLayer(this.map, stops, { activeId, legs, onStopClick, onPinShown: this.onPinShown });
+  }
+
+  clearTrip() {
+    if (this.trip) this.map.removeLayer(this.trip);
+    this.trip = null;
   }
 
   setPinsVisible(on) {

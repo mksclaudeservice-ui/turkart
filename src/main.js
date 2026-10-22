@@ -1,10 +1,11 @@
 import './style.css';
 import { supabase, configured, signedUrls, BUCKET } from './supabase.js';
-import { TurMap, miniMap, miniMapPoints, miniMapTrack, drawLines } from './map.js';
+import { TurMap, miniMap, miniMapPoints, miniMapTrack, miniMapTrip, drawLines } from './map.js';
 import { isTrackFile, parseTrackFile, positionAt, withinTrack, profileSvg, clusterTracks } from './tracks.js';
 import { searchPlaces, elevationFor, nameForPoint, distanceKm } from './geo.js';
 import { isImageFile, processFile, existingHashes, uploadAll, squareJpeg } from './upload.js';
 import { clusterPhotos, suggestForGroups } from './grouping.js';
+import { LEG_MODES, defaultMode, routeLeg } from './routing.js';
 
 const app = document.getElementById('app');
 
@@ -94,6 +95,11 @@ const state = {
   })(),
   visitPeople: [],
   tracks: [],
+  legs: [],
+  legsSaved: false,
+  tripStop: null,
+  tripOnMap: null,
+  detailMap: null,
   trackPoints: new Map(),
   tripPeople: [],
   selected: null, // {type:'place'|'trip', id}
@@ -112,7 +118,7 @@ function toast(msg, kind = 'ok') {
 
 // ---------- data ----------
 async function loadData() {
-  const [p, v, t, ph, pe, vp, tp, tr, me] = await Promise.all([
+  const [p, v, t, ph, pe, vp, tp, tr, me, legs] = await Promise.all([
     supabase.from('places').select('*').order('created_at'),
     supabase.from('visits').select('*').order('visited_on', { ascending: false }),
     supabase.from('trips').select('*').order('start_date', { ascending: false }),
@@ -121,8 +127,11 @@ async function loadData() {
     supabase.from('visit_people').select('*'),
     supabase.from('trip_people').select('*'),
     supabase.from('tracks').select('id,visit_id,source,original_name,started_at,duration_min,distance_km,ascent_m,max_ele'),
-    supabase.from('allowed_users').select('is_admin').ilike('email', userEmail()).maybeSingle()
+    supabase.from('allowed_users').select('is_admin').ilike('email', userEmail()).maybeSingle(),
+    supabase.from('trip_legs').select('*')
   ]);
+  state.legs = legs?.error ? [] : legs?.data ?? [];
+  state.legsSaved = !legs?.error;
   state.isAdmin = Boolean(me?.data?.is_admin);
   const adm = $('.user-menu-admin');
   if (adm) adm.hidden = !state.isAdmin;
@@ -335,6 +344,137 @@ function tripStops(trip) {
   const ids = new Set(state.visits.filter((v) => v.trip_id === trip.id).map((v) => v.place_id));
   return state.places.filter((p) => ids.has(p.id));
 }
+/** Stoppene på en reise i rekkefølgen de ble besøkt, nummerert, med datoer for besøket på denne reisen. */
+function orderedStops(trip) {
+  const visits = state.visits.filter((v) => v.trip_id === trip.id);
+  const byPlace = new Map();
+  for (const v of visits) {
+    const cur = byPlace.get(v.place_id) ?? { first: null, last: null };
+    if (v.visited_on) {
+      if (!cur.first || v.visited_on < cur.first) cur.first = v.visited_on;
+      if (!cur.last || v.visited_on > cur.last) cur.last = v.visited_on;
+    }
+    byPlace.set(v.place_id, cur);
+  }
+  return state.places
+    .filter((p) => byPlace.has(p.id))
+    .map((p) => ({ p, ...byPlace.get(p.id) }))
+    .sort((a, b) => (a.first ?? '9999').localeCompare(b.first ?? '9999') || a.p.name.localeCompare(b.p.name, 'nb'))
+    .map((x, i) => {
+      const cover = placeCover(x.p);
+      const when = x.first ? (x.last && x.last !== x.first ? fmtRange(x.first, x.last) : fmtDate(x.first)) : '';
+      return {
+        id: x.p.id,
+        n: i + 1,
+        name: x.p.name,
+        lat: x.p.lat,
+        lon: x.p.lon,
+        when,
+        label: esc([x.p.name, when].filter(Boolean).join(' · ')),
+        thumb: cover?.thumb_path ?? null,
+        pos: cover ? focusPos(cover) : null,
+        place: x.p
+      };
+    });
+}
+// ---------- etapper mellom stopp ----------
+const legKey = (tripId, a, b) => `${tripId}|${a}|${b}`;
+const legCache = new Map(); // brukes når etapper ikke kan lagres (tabellen mangler)
+function tripLegs(trip, stops) {
+  const out = [];
+  for (let i = 1; i < stops.length; i++) {
+    const a = stops[i - 1];
+    const b = stops[i];
+    const row = state.legs.find((l) => l.trip_id === trip.id && l.from_place === a.id && l.to_place === b.id) ?? legCache.get(legKey(trip.id, a.id, b.id));
+    const mode = row?.mode ?? defaultMode(a, b);
+    out.push({ trip, a, b, mode, row, points: row?.points ?? null, distanceKm: row?.distance_km ?? null, durationMin: row?.duration_min ?? null });
+  }
+  return out;
+}
+const fmtLeg = (l) => [l.distanceKm != null ? fmtKm(l.distanceKm) : '', l.durationMin != null ? fmtDuration(l.durationMin) : ''].filter(Boolean).join(' · ');
+async function saveLeg(trip, a, b, mode) {
+  const r = await routeLeg(a, b, mode);
+  const row = { trip_id: trip.id, from_place: a.id, to_place: b.id, mode, points: r.points, distance_km: r.distanceKm, duration_min: r.durationMin, routed: r.routed };
+  if (state.legsSaved) {
+    const { data, error } = await supabase.from('trip_legs').upsert(row, { onConflict: 'trip_id,from_place,to_place' }).select('*').single();
+    if (!error) {
+      state.legs = state.legs.filter((l) => !(l.trip_id === trip.id && l.from_place === a.id && l.to_place === b.id));
+      state.legs.push(data);
+      return;
+    }
+    console.warn('Kunne ikke lagre etappe', error);
+  }
+  legCache.set(legKey(trip.id, a.id, b.id), row);
+}
+const legJobs = new Set();
+/** Beregn etapper som mangler rute, og tegn kartet på nytt etter hvert. */
+async function ensureLegs(trip) {
+  const stops = orderedStops(trip);
+  for (const l of tripLegs(trip, stops)) {
+    if (l.points) continue;
+    const key = legKey(trip.id, l.a.id, l.b.id);
+    if (legJobs.has(key)) continue;
+    legJobs.add(key);
+    try {
+      await saveLeg(trip, l.a, l.b, l.mode);
+    } finally {
+      legJobs.delete(key);
+    }
+    redrawTrip(trip);
+  }
+}
+function redrawTrip(trip) {
+  const shown = state.selected?.type === 'trip' ? state.selected.id : !state.selected ? state.tripOnMap : null;
+  if (shown !== trip.id) return;
+  const stops = orderedStops(trip);
+  const legs = tripLegs(trip, stops);
+  state.map.showTrip(stops, { activeId: state.tripStop, legs, onStopClick: selectTripStop });
+  state.detailMap?.redraw?.(state.tripStop, legs);
+  for (const l of legs) {
+    const el = document.querySelector(`[data-leg-info="${l.a.id}|${l.b.id}"]`);
+    if (el) el.textContent = l.points ? fmtLeg(l) : 'Beregner rute …';
+  }
+}
+function legRow(l) {
+  const opts = Object.entries(LEG_MODES).map(([k, m]) => `<option value="${k}" ${k === l.mode ? 'selected' : ''}>${m.label}</option>`).join('');
+  return `<div class="leg-row">
+    <select class="leg-mode" data-trip="${l.trip.id}" data-from="${l.a.id}" data-to="${l.b.id}" aria-label="Transport fra ${esc(l.a.name)} til ${esc(l.b.name)}">${opts}</select>
+    <span class="leg-info" data-leg-info="${l.a.id}|${l.b.id}">${l.points ? fmtLeg(l) : 'Beregner rute …'}</span>
+  </div>`;
+}
+document.addEventListener('change', async (e) => {
+  const sel = e.target.closest?.('.leg-mode');
+  if (!sel) return;
+  const trip = state.trips.find((t) => t.id === sel.dataset.trip);
+  const stops = trip ? orderedStops(trip) : [];
+  const a = stops.find((x) => x.id === sel.dataset.from);
+  const b = stops.find((x) => x.id === sel.dataset.to);
+  if (!trip || !a || !b) return;
+  const info = document.querySelector(`[data-leg-info="${a.id}|${b.id}"]`);
+  if (info) info.textContent = 'Beregner rute …';
+  sel.disabled = true;
+  await saveLeg(trip, a, b, sel.value);
+  sel.disabled = false;
+  redrawTrip(trip);
+});
+
+function selectTripStop(id) {
+  const tid = state.selected?.type === 'trip' ? state.selected.id : !state.selected ? state.tripOnMap : null;
+  const t = tid ? state.trips.find((x) => x.id === tid) : null;
+  if (!t) return;
+  state.tripStop = state.tripStop === id ? null : id;
+  const stops = orderedStops(t);
+  const legs = tripLegs(t, stops);
+  state.map.showTrip(stops, { activeId: state.tripStop, legs, onStopClick: selectTripStop });
+  state.detailMap?.redraw?.(state.tripStop, legs);
+  document.querySelectorAll('[data-action="trip-stop"]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.id === state.tripStop)));
+  const s = stops.find((x) => x.id === state.tripStop);
+  if (s) {
+    state.map.flyTo(s, 9);
+    if (state.detailMap) state.detailMap.setView([s.lat, s.lon], Math.max(state.detailMap.getZoom(), 9));
+    document.querySelector(`[data-action="trip-stop"][data-id="${s.id}"]`)?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+  } else if (stops.length) state.map.fitTo(stops);
+}
 
 // ---------- rendering ----------
 const userEmail = () => state.session?.user?.email ?? '';
@@ -386,6 +526,7 @@ function renderShell() {
           <button type="button" class="side-toggle" data-action="side-open" aria-controls="side" aria-expanded="false">${ICON.list}<span id="side-toggle-label">Turer</span></button>
           <button type="button" class="map-chip" data-action="toggle-tracks" aria-pressed="${state.showAllTracks}" title="Vis spor for alle turer på kartet">${ICON.route}<span>Spor</span></button>
           <button type="button" class="map-chip" data-action="toggle-pins" aria-pressed="${state.showPins}" title="Vis eller skjul nålene på kartet">${ICON.pin}<span>Nåler</span></button>
+          <button type="button" class="map-chip map-chip--trip" data-action="clear-trip-map" hidden></button>
         </div>
         <div class="pick-banner" id="pick-banner" hidden>Klikk i kartet for å plassere stedet <button type="button" class="btn btn--link" data-action="cancel-pick">Avbryt</button></div>
         <section class="detail" id="detail" hidden aria-live="polite"></section>
@@ -428,9 +569,23 @@ function render({ fit = false } = {}) {
   const label = state.mode === 'fjell' ? 'Turer' : 'Reiser';
   $('#side').innerHTML = `<div class="side-head"><h2>${label}</h2><button type="button" class="icon-btn" data-action="side-close" aria-label="Lukk liste">${ICON.chevronLeft}</button></div>${state.mode === 'fjell' ? sideFjell() : sideReise()}`;
   $('#side-toggle-label').textContent = `${label}${count ? ` (${count})` : ''}`;
-  const places = visiblePlaces();
+  // En åpen reise vises alene på kartet: nummererte stopp og ruten mellom dem.
+  const selTrip =
+    state.selected?.type === 'trip'
+      ? state.trips.find((t) => t.id === state.selected.id)
+      : !state.selected && state.tripOnMap
+        ? state.trips.find((t) => t.id === state.tripOnMap)
+        : null;
+  if (state.selected) state.tripOnMap = null;
+  const tripChip = $('[data-action="clear-trip-map"]');
+  if (tripChip) {
+    tripChip.hidden = !(selTrip && !state.selected);
+    if (selTrip) tripChip.innerHTML = `<span>${esc(selTrip.title)}</span>${ICON.close}`;
+    tripChip.setAttribute('aria-label', 'Vis alle reiser igjen');
+  }
+  const places = selTrip ? [] : visiblePlaces();
   const routes =
-    state.mode === 'reise'
+    state.mode === 'reise' && !selTrip
       ? visibleTrips().map((t) => tripStops(t).filter((p) => p.mode === 'reise').sort((a, b) => (a.lastVisit ?? '').localeCompare(b.lastVisit ?? '')))
       : [];
   for (const p of places) {
@@ -441,9 +596,14 @@ function render({ fit = false } = {}) {
   state.map.render(places, { selectedId: state.selected?.type === 'place' ? state.selected.id : null, routes });
   state.map.setPinsVisible(state.showPins);
   $('[data-action="toggle-pins"]')?.setAttribute('aria-pressed', String(state.showPins));
+  if (selTrip) {
+    const stops = orderedStops(selTrip);
+    state.map.showTrip(stops, { activeId: state.tripStop, legs: tripLegs(selTrip, stops), onStopClick: selectTripStop });
+    ensureLegs(selTrip);
+  } else state.map.clearTrip();
   hydrateThumbs($('#map'));
   renderAllTracks(places);
-  if (fit) state.map.fitTo(places);
+  if (fit && !selTrip) state.map.fitTo(places);
   renderDetail();
 }
 
@@ -566,6 +726,7 @@ async function hydrateThumbs(root = document) {
 
 // ---------- detail ----------
 function select(type, id) {
+  if (type !== 'trip' || state.selected?.id !== id) state.tripStop = null;
   state.selected = { type, id };
   render();
   if (type === 'place') {
@@ -648,9 +809,13 @@ function renderDetail() {
       if (p) detailMap = miniMapPoints(mapEl, [{ lat: p.lat, lon: p.lon, color: p.mode === 'reise' ? '#2B5C8A' : '#2F5D50' }], { maxZoom: 12 });
     } else {
       const t = state.trips.find((x) => x.id === sel.id);
-      if (t) detailMap = miniMapPoints(mapEl, tripStops(t).map((p) => ({ lat: p.lat, lon: p.lon, color: p.mode === 'reise' ? '#2B5C8A' : '#2F5D50' })), { maxZoom: 11 });
+      if (t) {
+        const stops = orderedStops(t);
+        detailMap = miniMapTrip(mapEl, stops, { activeId: state.tripStop, legs: tripLegs(t, stops), onStopClick: selectTripStop, onPinShown: (e) => hydrateThumbs(e) });
+      }
     }
   }
+  state.detailMap = sel.type === 'trip' ? detailMap : null;
   showDetailTracks(sel, detailMap);
 }
 
@@ -722,9 +887,13 @@ function placeDetail(p) {
 function tripDetail(t) {
   if (!t) return '';
   const stops = tripStops(t);
-  const tours = stops.filter((p) => p.mode === 'fjell');
-  const others = stops.filter((p) => p.mode !== 'fjell');
+  const ordered = orderedStops(t);
   const photos = tripPhotos(t);
+  const chips = ordered.length
+    ? `<div class="stop-chips" role="list">${ordered
+        .map((s) => `<button type="button" role="listitem" class="stop-chip" data-action="trip-stop" data-id="${s.id}" aria-pressed="${s.id === state.tripStop}"><span class="stop-num">${s.n}</span><span>${esc(s.name)}</span></button>`)
+        .join('')}</div>`
+    : '';
   return `
     <div class="detail-head">
       <div class="chips-inline"><span class="tag tag--trip">Reise</span>${t.status === 'wish' ? '<span class="tag tag--wish">Ønsker</span>' : ''}</div>
@@ -732,15 +901,22 @@ function tripDetail(t) {
     </div>
     ${coverBlock('trip', t, tripCover(t))}
     <h2>${esc(t.title)}</h2>
-    <p class="muted">${[fmtRange(t.start_date, t.end_date), nights(t.start_date, t.end_date) ? `${nights(t.start_date, t.end_date)} netter` : '', t.countries.join(', ')].filter(Boolean).join(' · ')}</p>
+    <p class="muted">${[fmtRange(t.start_date, t.end_date), ordered.length ? `${ordered.length} stopp` : '', t.countries.join(', ')].filter(Boolean).join(' · ')}</p>
     ${peopleRow(t.people)}
     ${detailMapBlock('trip', t.id, stops.length > 0)}
+    ${chips}
+    <div class="trip-actions">
+      ${photos.length ? `<button type="button" class="btn btn--dark" data-action="trip-photos">${ICON.image}Se bilder fra reisen</button>` : ''}
+      <button type="button" class="btn btn--ghost" data-action="add-trip-stop" data-id="${t.id}">${ICON.plus}Legg til stopp</button>
+    </div>
     ${t.notes ? `<p class="note">${esc(t.notes)}</p>` : ''}
-    <div class="section-head"><h3 class="eyebrow">Turer på reisen${tours.length ? ` (${tours.length})` : ''}</h3>
+    <div class="section-head"><h3 class="eyebrow">Stopp${ordered.length ? ` (${ordered.length})` : ''}</h3>
       <button type="button" class="btn btn--link btn--xs" data-action="link-tours" data-id="${t.id}">${ICON.link}Koble til turer</button></div>
-    ${tours.length ? tours.map(placeRow).join('') : '<p class="muted">Ingen turer koblet til ennå.</p>'}
-    ${others.length ? `<h3 class="eyebrow">Steder</h3>${others.map(placeRow).join('')}` : ''}
-    <h3 class="eyebrow">Bilder</h3>
+    ${ordered.length ? (() => {
+      const legs = tripLegs(t, ordered);
+      return ordered.map((s, i) => `${i > 0 ? legRow(legs[i - 1]) : ''}<div class="stop-row"><span class="stop-num">${s.n}</span>${placeRow(s.place)}</div>`).join('');
+    })() : '<p class="muted">Ingen stopp ennå. Legg til et sted, eller koble til turer dere gikk på reisen.</p>'}
+    <h3 class="eyebrow" id="trip-photos">Bilder</h3>
     ${photoGrid(photos)}
     <div class="detail-actions">
       <button type="button" class="btn btn--dark" data-action="edit-trip" data-id="${t.id}">Rediger</button>
@@ -2053,6 +2229,8 @@ document.addEventListener('click', async (e) => {
   if (a === 'show-on-map') {
     const type = t.dataset.type;
     state.selected = null;
+    // En reise vises fortsatt med stopp og rute på hovedkartet, til man lukker den.
+    state.tripOnMap = type === 'trip' ? id : null;
     render();
     if (type === 'place') {
       const p = state.places.find((x) => x.id === id);
@@ -2061,6 +2239,11 @@ document.addEventListener('click', async (e) => {
       const tr = state.trips.find((x) => x.id === id);
       if (tr) state.map.fitTo(tripStops(tr));
     }
+    return;
+  }
+  if (a === 'clear-trip-map') {
+    state.tripOnMap = null;
+    render({ fit: true });
     return;
   }
   if (a === 'toggle-tracks') {
@@ -2111,6 +2294,9 @@ document.addEventListener('click', async (e) => {
     render();
   } else if (a === 'add') state.mode === 'fjell' ? placeForm() : addMenu();
   else if (a === 'add-place-reise') placeForm(null, { mode: 'reise', kind: 'sted' });
+  else if (a === 'trip-stop') selectTripStop(id);
+  else if (a === 'trip-photos') $('#trip-photos')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  else if (a === 'add-trip-stop') placeForm(null, { mode: 'reise', kind: 'sted', trip_id: id });
   else if (a === 'add-trip') tripForm();
   else if (a === 'edit-place') placeForm(state.places.find((p) => p.id === id));
   else if (a === 'add-visit') visitForm(state.places.find((p) => p.id === id));
