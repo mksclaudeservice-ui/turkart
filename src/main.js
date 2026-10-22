@@ -63,6 +63,7 @@ const ICON = {
   chevronLeft: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>',
   pin: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>',
   route: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h7a3.5 3.5 0 0 0 0-7H9a3.5 3.5 0 0 1 0-7h7"/></svg>',
+  move: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M15 8l4 4-4 4M9 4H5v16h4"/></svg>',
   trash: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>',
   close: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>'
 };
@@ -122,7 +123,7 @@ async function loadData() {
     supabase.from('places').select('*').order('created_at'),
     supabase.from('visits').select('*').order('visited_on', { ascending: false }),
     supabase.from('trips').select('*').order('start_date', { ascending: false }),
-    supabase.from('photos').select('id,thumb_path,storage_path,place_id,visit_id,trip_id,taken_at,lat,lon,created_at,focus_x,focus_y').order('taken_at'),
+    supabase.from('photos').select('id,thumb_path,storage_path,place_id,visit_id,trip_id,taken_at,lat,lon,created_at,focus_x,focus_y,position_ok').order('taken_at'),
     supabase.from('people').select('*').order('created_at'),
     supabase.from('visit_people').select('*'),
     supabase.from('trip_people').select('*'),
@@ -146,6 +147,7 @@ async function loadData() {
   state.tracks = tr.data ?? [];
   derive();
   await loadNotes();
+  findMisplaced().then(() => updateInboxCount());
 }
 
 async function loadNotes() {
@@ -562,7 +564,8 @@ function render({ fit = false } = {}) {
   document.querySelectorAll('[data-action="mode"]').forEach((b) => b.setAttribute('aria-pressed', b.dataset.mode === state.mode));
   $('#add-label').textContent = state.mode === 'fjell' ? 'Legg til tur' : 'Legg til reise';
   const unsorted = state.photos.filter((p) => !p.place_id && !p.trip_id).length;
-  $('#inbox-count').textContent = unsorted || '';
+  state.unsortedCount = unsorted;
+  updateInboxCount();
   $('#notes-count').textContent = state.notes.filter((n) => !n.done).length || '';
   renderMe();
   const count = state.mode === 'fjell' ? visiblePlaces().length : visibleTrips().length + visiblePlaces().filter((p) => p.status === 'wish').length;
@@ -1658,6 +1661,21 @@ function inbox() {
   openDialog(
     `<div class="form">
       <div class="dlg-head"><h2>Usortert (${photos.length})</h2><button type="button" class="icon-btn" data-action="close-dlg" aria-label="Lukk">${ICON.close}</button></div>
+      ${(state.misplaced ?? []).length ? `<h3 class="eyebrow">Forslag</h3><div class="mis-list">${state.misplaced
+        .map((g, i) => {
+          const best = g.matches[0];
+          const n = g.photos.length;
+          return `<div class="mis-card">
+            <div class="gstrip">${g.photos.slice(0, 5).map((p) => `<img alt="" data-thumb="${esc(p.thumb_path)}" />`).join('')}</div>
+            <p>${n === 1 ? 'Ett bilde' : `${n} bilder`} fra <b>${esc(g.place.name)}</b> er tatt ${fmtKm(Math.round(g.km * 10) / 10)} unna${best ? `, nær <b>${esc(best.p.name)}</b>${best.same ? ' (besøkt samme dag)' : ''}` : ''}.</p>
+            <div class="mis-actions">
+              ${best ? `<button type="button" class="btn btn--dark btn--sm" data-mis-move="${i}">Flytt til ${esc(best.p.name)}</button>` : `<button type="button" class="btn btn--dark btn--sm" data-mis-new="${i}">${ICON.plus}Nytt sted</button>`}
+              <button type="button" class="btn btn--ghost btn--sm" data-mis-pick="${i}">Andre valg</button>
+              <button type="button" class="btn btn--link btn--sm" data-mis-ok="${i}">Stemmer</button>
+            </div>
+          </div>`;
+        })
+        .join('')}</div><h3 class="eyebrow">Usorterte bilder</h3>` : ''}
       ${photos.length ? `<p class="muted">Bilder uten posisjon eller som ble hoppet over. Velg bilder og koble dem til et sted eller en reise.</p>
       <div class="inbox-grid">${photos
         .map((p) => `<label class="ithumb"><input type="checkbox" value="${p.id}" /><img alt="" data-thumb="${esc(p.thumb_path)}" /><span>${p.taken_at ? fmtDate(p.taken_at) : 'Uten dato'}</span></label>`)
@@ -1674,6 +1692,30 @@ function inbox() {
     </div>`,
     (d) => {
       hydrateThumbs(d);
+      const mis = (el, k) => state.misplaced[Number(el.dataset[k])];
+      d.querySelectorAll('[data-mis-move]').forEach((b) =>
+        b.addEventListener('click', async () => {
+          const g = mis(b, 'misMove');
+          try {
+            await movePhotosToPlace(g.photos.map((p) => p.id), g.matches[0].p.id);
+            await afterMove(`Flyttet til ${g.matches[0].p.name}`);
+            inbox();
+          } catch (err) {
+            toast(`Kunne ikke flytte: ${err.message}`, 'err');
+          }
+        })
+      );
+      d.querySelectorAll('[data-mis-new]').forEach((b) => b.addEventListener('click', () => newFromInbox('place', mis(b, 'misNew').photos.map((p) => p.id))));
+      d.querySelectorAll('[data-mis-pick]').forEach((b) => b.addEventListener('click', () => moveDialog(mis(b, 'misPick').photos.map((p) => p.id))));
+      d.querySelectorAll('[data-mis-ok]').forEach((b) =>
+        b.addEventListener('click', async () => {
+          const ids = mis(b, 'misOk').photos.map((p) => p.id);
+          const { error } = await supabase.from('photos').update({ position_ok: true }).in('id', ids);
+          if (error) return toast(`Kunne ikke lagre: ${error.message}`, 'err');
+          await afterMove('Greit, forslaget vises ikke igjen');
+          inbox();
+        })
+      );
       $('#ib-apply', d)?.addEventListener('click', async () => {
         const ids = [...d.querySelectorAll('.ithumb input:checked')].map((i) => i.value);
         const target = $('#ib-target', d).value;
@@ -1699,6 +1741,147 @@ function inbox() {
           await deletePhotos(ids);
           inbox();
         });
+      });
+    }
+  );
+}
+
+// ---------- bilder som ligger feil, og flytting av bilder ----------
+const MISPLACED_KM = 3;
+function updateInboxCount() {
+  const el = $('#inbox-count');
+  if (el) el.textContent = (state.unsortedCount ?? 0) + (state.misplaced?.length ?? 0) || '';
+}
+const day = (ph) => (ph.taken_at ? isoDay(new Date(ph.taken_at)) : null);
+/** Sannsynlige steder for et punkt: besøk samme dag først, deretter nærmeste steder. */
+function placeMatches(pt, { excludeId = null, date = null } = {}) {
+  if (!pt || pt.lat == null) return [];
+  return state.places
+    .filter((p) => p.id !== excludeId && p.status !== 'wish')
+    .map((p) => ({ p, d: distanceKm(pt, p), same: Boolean(date) && (p.visitsList ?? []).some((v) => v.visited_on === date) }))
+    .filter((x) => x.d <= 3 || (x.same && x.d <= 25))
+    .sort((a, b) => Number(b.same) - Number(a.same) || a.d - b.d)
+    .slice(0, 4);
+}
+/** Finn bilder som er tatt langt fra stedet de er koblet til (og ikke langs turens spor). Grupper per besøk. */
+async function findMisplaced() {
+  const cand = state.photos.filter((ph) => ph.place_id && ph.lat != null && !ph.position_ok);
+  const far = cand.filter((ph) => {
+    const p = state.places.find((x) => x.id === ph.place_id);
+    return p && distanceKm(ph, p) > MISPLACED_KM;
+  });
+  const trackIds = [...new Set(far.flatMap((ph) => state.visits.find((v) => v.id === ph.visit_id)?.tracks?.map((t) => t.id) ?? []))];
+  try {
+    if (trackIds.length) await trackPointsFor(trackIds);
+  } catch (err) {
+    console.warn(err);
+  }
+  const groups = new Map();
+  for (const ph of far) {
+    const visit = state.visits.find((v) => v.id === ph.visit_id);
+    const nearTrack = (visit?.tracks ?? []).some((t) => (state.trackPoints.get(t.id) ?? []).some((q, i) => i % 3 === 0 && distanceKm({ lat: q[0], lon: q[1] }, ph) <= 1));
+    if (nearTrack) continue;
+    const key = `${ph.place_id}|${ph.visit_id ?? ''}`;
+    if (!groups.has(key)) groups.set(key, { place: state.places.find((x) => x.id === ph.place_id), photos: [] });
+    groups.get(key).photos.push(ph);
+  }
+  state.misplaced = [...groups.values()].map((g) => {
+    const center = { lat: g.photos.reduce((s, x) => s + x.lat, 0) / g.photos.length, lon: g.photos.reduce((s, x) => s + x.lon, 0) / g.photos.length };
+    return { ...g, center, km: distanceKm(center, g.place), matches: placeMatches(center, { excludeId: g.place.id, date: day(g.photos[0]) }) };
+  });
+}
+const misplacedFor = (photoId) => state.misplaced?.find((g) => g.photos.some((x) => x.id === photoId));
+
+/** Flytt bilder til et sted: gjenbruk besøk samme dag, ellers opprett et nytt besøk. */
+async function movePhotosToPlace(ids, placeId) {
+  const rows = state.photos.filter((p) => ids.includes(p.id));
+  const byDay = new Map();
+  for (const ph of rows) {
+    const k = day(ph) ?? '';
+    if (!byDay.has(k)) byDay.set(k, []);
+    byDay.get(k).push(ph.id);
+  }
+  for (const [d, group] of byDay) {
+    let visit = state.visits.find((v) => v.place_id === placeId && (v.visited_on ?? '') === d) ?? (!d ? state.visits.find((v) => v.place_id === placeId) : null);
+    if (!visit) {
+      const { data, error } = await supabase.from('visits').insert({ place_id: placeId, visited_on: d || null }).select('*').single();
+      if (error) throw error;
+      visit = data;
+      state.visits.push(data);
+      await addPeopleToVisit(data.id, meIds());
+    }
+    const { error } = await supabase.from('photos').update({ place_id: placeId, visit_id: visit.id, trip_id: visit.trip_id ?? null, position_ok: false }).in('id', group);
+    if (error) throw error;
+  }
+  await supabase.from('places').update({ status: 'visited' }).eq('id', placeId).eq('status', 'wish');
+  // Et flyttet bilde skal ikke lenger være hovedbilde for stedet det kom fra.
+  const oldPlaces = [...new Set(rows.map((r) => r.place_id).filter((x) => x && x !== placeId))];
+  for (const pid of oldPlaces) await supabase.from('places').update({ cover_photo_id: null }).eq('id', pid).in('cover_photo_id', ids);
+}
+async function afterMove(msg) {
+  closeDialog();
+  $('#lightbox').hidden = true;
+  await loadData();
+  render();
+  toast(msg);
+}
+
+/** Dialog for å flytte ett eller flere bilder, med forslag ut fra posisjon og dato. */
+function moveDialog(ids) {
+  const rows = state.photos.filter((p) => ids.includes(p.id));
+  if (!rows.length) return;
+  const located = rows.filter((p) => p.lat != null);
+  const center = located.length ? { lat: located.reduce((s, x) => s + x.lat, 0) / located.length, lon: located.reduce((s, x) => s + x.lon, 0) / located.length } : null;
+  const current = state.places.find((p) => p.id === rows[0].place_id);
+  const matches = placeMatches(center, { excludeId: current?.id, date: day(rows[0]) });
+  const n = rows.length;
+  const what = n === 1 ? 'bildet' : `de ${n} bildene`;
+  const placeOpts = [...state.places]
+    .filter((p) => p.id !== current?.id)
+    .sort((a, b) => a.name.localeCompare(b.name, 'nb'))
+    .map((p) => `<option value="${p.id}">${esc(p.name)}</option>`)
+    .join('');
+  openDialog(
+    `<div class="form">
+      <div class="dlg-head"><h2>Flytt ${n === 1 ? 'bilde' : `${n} bilder`}</h2><button type="button" class="icon-btn" data-action="close-dlg" aria-label="Lukk">${ICON.close}</button></div>
+      <div class="gstrip">${rows.slice(0, 6).map((p) => `<img alt="" data-thumb="${esc(p.thumb_path)}" />`).join('')}</div>
+      <p class="muted">${[current ? `Ligger nå på <b>${esc(current.name)}</b>` : 'Ligger i Usortert', center && current ? `tatt ${fmtKm(Math.round(distanceKm(center, current) * 10) / 10)} unna` : '', rows[0].taken_at ? fmtDate(rows[0].taken_at) : ''].filter(Boolean).join(' · ')}</p>
+      ${matches.length ? `<h3 class="eyebrow">Forslag</h3><div class="move-list">${matches
+        .map((m) => `<button type="button" class="move-opt" data-move-to="${m.p.id}"><b>${esc(m.p.name)}</b><span>${[`${fmtKm(Math.round(m.d * 10) / 10)} unna`, m.same ? 'besøkt samme dag' : ''].filter(Boolean).join(' · ')}</span></button>`)
+        .join('')}</div>` : ''}
+      <h3 class="eyebrow">Andre valg</h3>
+      <div class="move-list">
+        ${center ? `<button type="button" class="move-opt" id="mv-new"><b>${ICON.plus} Nytt sted der ${what} er tatt</b><span>Foreslår navn ut fra posisjonen</span></button>` : ''}
+        <div class="field-row"><label class="field"><span>Velg sted</span><select id="mv-place">${placeOpts}</select></label><button type="button" class="btn btn--dark btn--self" id="mv-apply">Flytt</button></div>
+        <button type="button" class="btn btn--ghost" id="mv-unsorted">Legg i Usortert</button>
+        ${current && misplacedFor(rows[0].id) ? `<button type="button" class="btn btn--link" id="mv-ok">Det stemmer – ${what} hører til ${esc(current.name)}</button>` : ''}
+      </div>
+    </div>`,
+    (d) => {
+      hydrateThumbs(d);
+      const go = async (placeId) => {
+        try {
+          await movePhotosToPlace(ids, placeId);
+          await afterMove(`${n === 1 ? 'Bildet' : `${n} bilder`} flyttet til ${state.places.find((p) => p.id === placeId)?.name ?? 'stedet'}`);
+        } catch (err) {
+          toast(`Kunne ikke flytte: ${err.message}`, 'err');
+        }
+      };
+      d.querySelectorAll('[data-move-to]').forEach((b) => b.addEventListener('click', () => go(b.dataset.moveTo)));
+      $('#mv-apply', d)?.addEventListener('click', () => $('#mv-place', d).value && go($('#mv-place', d).value));
+      $('#mv-new', d)?.addEventListener('click', () => {
+        $('#lightbox').hidden = true;
+        newFromInbox('place', ids);
+      });
+      $('#mv-unsorted', d)?.addEventListener('click', async () => {
+        const { error } = await supabase.from('photos').update({ place_id: null, visit_id: null, trip_id: null }).in('id', ids);
+        if (error) return toast(`Kunne ikke flytte: ${error.message}`, 'err');
+        await afterMove(`${n === 1 ? 'Bildet' : `${n} bilder`} lagt i Usortert`);
+      });
+      $('#mv-ok', d)?.addEventListener('click', async () => {
+        const { error } = await supabase.from('photos').update({ position_ok: true }).in('id', ids);
+        if (error) return toast(`Kunne ikke lagre: ${error.message}`, 'err');
+        await afterMove('Greit, forslaget vises ikke igjen');
       });
     }
   );
@@ -2171,7 +2354,7 @@ async function openPhoto(path, { keepList = false } = {}) {
   lb.hidden = false;
   const sel = state.selected;
   const canCover = photo && sel && (sel.type === 'place' ? photo.place_id === sel.id : coverTarget('trip', sel.id).photos.some((x) => x.id === photo.id));
-  const top = `<div class="lb-bar">${canCover ? `<button type="button" class="btn btn--glass" data-action="set-cover" data-id="${photo.id}">${ICON.image}Sett som hovedbilde</button>` : ''}<button type="button" class="icon-btn lb-btn" data-action="delete-photo" data-id="${photo?.id ?? ''}" aria-label="Slett bilde" title="Slett bilde">${ICON.trash}</button><button type="button" class="icon-btn lb-btn" data-action="close-photo" aria-label="Lukk">${ICON.close}</button></div>`;
+  const top = `<div class="lb-bar">${canCover ? `<button type="button" class="btn btn--glass" data-action="set-cover" data-id="${photo.id}">${ICON.image}Sett som hovedbilde</button>` : ''}${photo ? `<button type="button" class="icon-btn lb-btn" data-action="move-photo" data-id="${photo.id}" aria-label="Flytt bilde til et annet sted" title="Flytt bilde">${ICON.move}</button>` : ''}<button type="button" class="icon-btn lb-btn" data-action="delete-photo" data-id="${photo?.id ?? ''}" aria-label="Slett bilde" title="Slett bilde">${ICON.trash}</button><button type="button" class="icon-btn lb-btn" data-action="close-photo" aria-label="Lukk">${ICON.close}</button></div>`;
   const n = lbState.list.length;
   const nav = n > 1
     ? `<button type="button" class="lb-nav lb-nav--prev" data-action="photo-prev" aria-label="Forrige bilde">${ICON.chevronLeft}</button><button type="button" class="lb-nav lb-nav--next" data-action="photo-next" aria-label="Neste bilde">${ICON.chevronRight}</button><span class="lb-count">${lbState.i + 1} / ${n}</span>`
@@ -2185,7 +2368,12 @@ async function openPhoto(path, { keepList = false } = {}) {
   lb.innerHTML = `${top}${nav}<img alt="" src="${urls[path]}" />${
     photo
       ? lbState.infoOpen
-        ? `<div class="lb-info"><div class="lb-info-head">${photo.taken_at ? `<span>${fmtDate(photo.taken_at)}</span>` : '<span></span>'}<button type="button" class="icon-btn icon-btn--sm lb-info-close" data-action="lb-info-toggle" aria-label="Skjul kart og info" title="Skjul">${ICON.close}</button></div>${hasPos ? `<span>${fmtCoord(photo.lat, photo.lon)}</span><div class="minimap minimap--lb"></div>` : '<span class="muted">Ingen posisjon i bildet</span>'}</div>`
+        ? `<div class="lb-info"><div class="lb-info-head">${photo.taken_at ? `<span>${fmtDate(photo.taken_at)}</span>` : '<span></span>'}<button type="button" class="icon-btn icon-btn--sm lb-info-close" data-action="lb-info-toggle" aria-label="Skjul kart og info" title="Skjul">${ICON.close}</button></div>${hasPos ? `<span>${fmtCoord(photo.lat, photo.lon)}</span>${(() => {
+          const g = misplacedFor(photo.id);
+          if (!g) return '';
+          const best = g.matches[0];
+          return `<button type="button" class="lb-hint" data-action="move-photo" data-id="${photo.id}">Tatt ${fmtKm(Math.round(distanceKm(photo, g.place) * 10) / 10)} fra ${esc(g.place.name)}${best ? ` – nær ${esc(best.p.name)}` : ''}. Flytt?</button>`;
+        })()}<div class="minimap minimap--lb"></div>` : '<span class="muted">Ingen posisjon i bildet</span>'}</div>`
         : `<button type="button" class="lb-info-open" data-action="lb-info-toggle" aria-label="Vis kart og info">${ICON.pin}<span>${photo.taken_at ? fmtDate(photo.taken_at) : 'Info'}</span></button>`
       : ''
   }`;
@@ -2348,6 +2536,7 @@ document.addEventListener('click', async (e) => {
     openPhoto(lbState.list[lbState.i], { keepList: true });
   } else if (a === 'photo-prev') stepPhoto(-1);
   else if (a === 'photo-next') stepPhoto(1);
+  else if (a === 'move-photo') moveDialog([id]);
   else if (a === 'delete-photo') {
     if (!id) return;
     confirmDialog('Bildet slettes permanent fra Turkart. Originalen i iCloud påvirkes ikke.', async () => {

@@ -243,3 +243,6 @@ create table if not exists public.trip_legs (
 alter table public.trip_legs enable row level security;
 drop policy if exists "members_all" on public.trip_legs;
 create policy "members_all" on public.trip_legs for all to authenticated using (public.is_member()) with check (public.is_member());
+
+-- 16. Bilder som ligger langt fra stedet sitt, men er bekreftet riktige -----------
+alter table public.photos add column if not exists position_ok boolean not null default false;

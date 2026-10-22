@@ -549,3 +549,15 @@ fieldset.visit-only { display: flex; flex-direction: column; gap: 10px; }
 .map-chip--trip { gap: 8px; }
 .map-chip--trip[hidden] { display: none; }
 .leaflet-marker-icon.pin-num { display: flex; }
+
+/* ---------- Flytte bilder og forslag om feilplasserte bilder ---------- */
+.move-list { display: flex; flex-direction: column; gap: 8px; }
+.move-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 52px; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.move-opt b { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.move-opt span { color: var(--muted); font-size: 13px; }
+.move-opt:hover { border-color: var(--fjell); }
+.mis-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
+.mis-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 14px; background: var(--wish-soft); }
+.mis-card p { margin: 0; font-size: 14px; }
+.mis-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.lb-hint { display: block; max-width: 220px; padding: 6px 10px; border: 0; border-radius: 8px; background: #e59a68; color: #1b130d; font: 600 12px/1.35 var(--font-body); text-align: left; cursor: pointer; }
