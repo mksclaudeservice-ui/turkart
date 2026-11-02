@@ -136,14 +136,18 @@ export function tripLayer(map, stops, { activeId = null, color = '#2B5C8A', legs
     const html = `<svg viewBox="0 0 16 16" width="16" height="16" style="transform:rotate(${-deg}deg)" aria-hidden="true"><path d="M5 3l6 5-6 5" fill="none" stroke="${color}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
     L.marker(mid, { icon: L.divIcon({ className: 'trip-arrow', html, iconSize: [16, 16], iconAnchor: [8, 8] }), interactive: false, keyboard: false }).addTo(group);
   }
+  const drawn = new Set(); // et sted som er med flere ganger får én nål, f.eks. «1·5»
   for (const s of stops) {
+    if (drawn.has(s.id)) continue;
+    drawn.add(s.id);
+    const num = s.nLabel ?? s.n;
     const on = s.id === activeId;
     const html = on
-      ? `<span class="pin-num-photo" ${s.thumb ? `data-thumb="${s.thumb}" style="background-position:${s.pos ?? '50% 50%'}"` : ''}></span><span class="pin-num-badge">${s.n}</span><span class="pin-num-label">${s.label}</span>`
-      : `${s.n}`;
-    const size = on ? 56 : 30;
+      ? `<span class="pin-num-photo" ${s.thumb ? `data-thumb="${s.thumb}" style="background-position:${s.pos ?? '50% 50%'}"` : ''}></span><span class="pin-num-badge">${num}</span><span class="pin-num-label">${s.label}</span>`
+      : `${num}`;
+    const size = on ? 56 : String(num).length > 2 ? 40 : 30;
     const icon = L.divIcon({ className: `pin-num ${on ? 'pin-num--on' : ''}`, html, iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
-    L.marker([s.lat, s.lon], { icon, title: `${s.n}. ${s.name}`, keyboard: true, zIndexOffset: on ? 1000 : 0 })
+    L.marker([s.lat, s.lon], { icon, title: `${num}. ${s.name}`, keyboard: true, zIndexOffset: on ? 1000 : 0 })
       .on('click', () => onStopClick?.(s.id))
       .on('add', (e) => { const el = e.target.getElement(); if (el) onPinShown?.(el); })
       .addTo(group);

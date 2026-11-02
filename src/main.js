@@ -347,38 +347,70 @@ function tripStops(trip) {
   const ids = new Set(state.visits.filter((v) => v.trip_id === trip.id).map((v) => v.place_id));
   return state.places.filter((p) => ids.has(p.id));
 }
-/** Stoppene på en reise i rekkefølgen de ble besøkt, nummerert, med datoer for besøket på denne reisen. */
+/** Stoppene på en reise i rekkefølgen de ble besøkt, nummerert. Ett stopp per besøk, så et sted
+ *  kan komme igjen (f.eks. samme flyplass ved start og slutt). Besøk rett etter hverandre på samme sted slås sammen. */
 function orderedStops(trip) {
-  const visits = state.visits.filter((v) => v.trip_id === trip.id);
-  const byPlace = new Map();
-  for (const v of visits) {
-    const cur = byPlace.get(v.place_id) ?? { first: null, last: null };
-    if (v.visited_on) {
-      if (!cur.first || v.visited_on < cur.first) cur.first = v.visited_on;
-      if (!cur.last || v.visited_on > cur.last) cur.last = v.visited_on;
-    }
-    byPlace.set(v.place_id, cur);
+  const placeById = new Map(state.places.map((p) => [p.id, p]));
+  const visits = state.visits.filter((v) => v.trip_id === trip.id && placeById.has(v.place_id));
+  // Klokkeslett for besøket: tidligste bilde koblet til besøket, ellers bilder fra stedet samme dag.
+  const timeOf = (v) => {
+    if (!v.visited_on) return null;
+    const p = placeById.get(v.place_id);
+    const ts = (p.photoList ?? [])
+      .filter((ph) => ph.taken_at && (ph.visit_id === v.id || (!ph.visit_id && ph.taken_at.slice(0, 10) === v.visited_on)))
+      .map((ph) => ph.taken_at)
+      .sort();
+    return ts[0] ?? null;
+  };
+  const dated = visits.filter((v) => v.visited_on).map((v) => ({ v, t: timeOf(v) }));
+  const firstDay = new Map();
+  for (const x of dated) {
+    const d = firstDay.get(x.v.place_id);
+    if (!d || x.v.visited_on < d) firstDay.set(x.v.place_id, x.v.visited_on);
   }
-  return state.places
-    .filter((p) => byPlace.has(p.id))
-    .map((p) => ({ p, ...byPlace.get(p.id) }))
-    .sort((a, b) => (a.first ?? '9999').localeCompare(b.first ?? '9999') || a.p.name.localeCompare(b.p.name, 'nb'))
-    .map((x, i) => {
-      const cover = placeCover(x.p);
-      const when = x.first ? (x.last && x.last !== x.first ? fmtRange(x.first, x.last) : fmtDate(x.first)) : '';
-      return {
-        id: x.p.id,
-        n: i + 1,
-        name: x.p.name,
-        lat: x.p.lat,
-        lon: x.p.lon,
-        when,
-        label: esc([x.p.name, when].filter(Boolean).join(' · ')),
-        thumb: cover?.thumb_path ?? null,
-        pos: cover ? focusPos(cover) : null,
-        place: x.p
-      };
-    });
+  dated.sort((a, b) => {
+    if (a.v.visited_on !== b.v.visited_on) return a.v.visited_on.localeCompare(b.v.visited_on);
+    if (a.t && b.t) return a.t.localeCompare(b.t);
+    // Samme dag uten klokkeslett: et sted dere har vært tidligere på reisen (hjemreise) kommer sist.
+    const ra = firstDay.get(a.v.place_id) < a.v.visited_on ? 1 : 0;
+    const rb = firstDay.get(b.v.place_id) < b.v.visited_on ? 1 : 0;
+    if (ra !== rb) return ra - rb;
+    if (a.t || b.t) return a.t ? -1 : 1;
+    return placeById.get(a.v.place_id).name.localeCompare(placeById.get(b.v.place_id).name, 'nb');
+  });
+  const seq = [];
+  for (const { v } of dated) {
+    const last = seq[seq.length - 1];
+    if (last && last.p.id === v.place_id) last.last = v.visited_on;
+    else seq.push({ p: placeById.get(v.place_id), first: v.visited_on, last: v.visited_on });
+  }
+  // Steder på reisen uten dato kommer til slutt, én gang.
+  const seen = new Set(seq.map((x) => x.p.id));
+  const undated = [...new Set(visits.filter((v) => !v.visited_on).map((v) => v.place_id))]
+    .filter((id) => !seen.has(id))
+    .map((id) => placeById.get(id))
+    .sort((a, b) => a.name.localeCompare(b.name, 'nb'));
+  for (const p of undated) seq.push({ p, first: null, last: null });
+
+  const nums = new Map();
+  seq.forEach((x, i) => nums.set(x.p.id, [...(nums.get(x.p.id) ?? []), i + 1]));
+  return seq.map((x, i) => {
+    const cover = placeCover(x.p);
+    const when = x.first ? (x.last && x.last !== x.first ? fmtRange(x.first, x.last) : fmtDate(x.first)) : '';
+    return {
+      id: x.p.id,
+      n: i + 1,
+      nLabel: nums.get(x.p.id).join('·'),
+      name: x.p.name,
+      lat: x.p.lat,
+      lon: x.p.lon,
+      when,
+      label: esc([x.p.name, when].filter(Boolean).join(' · ')),
+      thumb: cover?.thumb_path ?? null,
+      pos: cover ? focusPos(cover) : null,
+      place: x.p
+    };
+  });
 }
 // ---------- etapper mellom stopp ----------
 const legKey = (tripId, a, b) => `${tripId}|${a}|${b}`;
@@ -624,12 +656,12 @@ function filterChips() {
   return `<div class="chips">${f('all', 'Alle')}${f('visited', state.mode === 'fjell' ? 'Besøkt' : 'Reist', '<span class="dot dot--solid"></span>')}${f('wish', 'Ønsker', '<span class="dot dot--wish"></span>')}</div>`;
 }
 
-function placeRow(p) {
+function placeRow(p, when = null) {
   const thumb = placeCover(p);
   const meta =
     p.status === 'wish'
       ? [p.elevation ? `${num(p.elevation)} moh.` : '', p.wish_season ? `Beste tid: ${esc(p.wish_season)}` : ''].filter(Boolean).join(' · ')
-      : [fmtDate(p.lastVisit), p.elevation ? `${num(p.elevation)} moh.` : '', p.photoList.length ? `${p.photoList.length} bilder` : '']
+      : [when ?? fmtDate(p.lastVisit), p.elevation ? `${num(p.elevation)} moh.` : '', p.photoList.length ? `${p.photoList.length} bilder` : '']
           .filter(Boolean)
           .join(' · ');
   return `<button type="button" class="row ${p.status === 'wish' ? 'row--wish' : ''} ${state.selected?.id === p.id ? 'row--on' : ''}" data-action="select-place" data-id="${p.id}">
@@ -919,7 +951,7 @@ function tripDetail(t) {
       <button type="button" class="btn btn--link btn--xs" data-action="link-tours" data-id="${t.id}">${ICON.link}Koble til turer</button></div>
     ${ordered.length ? (() => {
       const legs = tripLegs(t, ordered);
-      return ordered.map((s, i) => `${i > 0 ? legRow(legs[i - 1]) : ''}<div class="stop-row"><span class="stop-num">${s.n}</span>${placeRow(s.place)}</div>`).join('');
+      return ordered.map((s, i) => `${i > 0 ? legRow(legs[i - 1]) : ''}<div class="stop-row"><span class="stop-num">${s.n}</span>${placeRow(s.place, s.when)}</div>`).join('');
     })() : '<p class="muted">Ingen stopp ennå. Legg til et sted, eller koble til turer dere gikk på reisen.</p>'}
     <h3 class="eyebrow" id="trip-photos">Bilder</h3>
     ${photoGrid(photos)}
