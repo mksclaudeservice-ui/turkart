@@ -572,3 +572,8 @@ fieldset.visit-only { display: flex; flex-direction: column; gap: 10px; }
 .newtrip { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px dashed var(--line); border-radius: 12px; }
 .newtrip[hidden] { display: none; }
 .newtrip > .field { flex: 0 0 auto; }
+
+/* iPhone zoomer inn på felt med tekst under 16px. På berøringsskjerm er alle felt minst 16px. */
+@media (pointer: coarse) {
+  input, select, textarea, .prow-emails { font-size: max(16px, 1em); }
+}
