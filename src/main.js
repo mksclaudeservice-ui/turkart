@@ -2594,13 +2594,16 @@ function addMenu() {
 // ---------- auth ----------
 // Passord er hovedinnlogging (lagres i nøkkelringen, Face ID fyller inn).
 // Engangskode på e-post er reserve – koden tastes inn i appen, så det virker også fra hjemskjermen.
+// Engangskode krever {{ .Token }} i e-postmalen, og malen kan bare endres med egen SMTP i Supabase.
+// Til det er satt opp sendes en innloggingslenke. Sett til true når SMTP og mal er på plass.
+const OTP_CODE = false;
 const LAST_EMAIL = 'turkart.email';
 const lastEmail = () => { try { return localStorage.getItem(LAST_EMAIL) || ''; } catch { return ''; } };
 const rememberEmail = (e) => { try { localStorage.setItem(LAST_EMAIL, e); } catch {} };
 
 function authError(error) {
   const m = (error?.message || '').toLowerCase();
-  if (m.includes('invalid login credentials')) return 'Feil e-post eller passord. Har du ikke laget passord ennå, bruk engangskode.';
+  if (m.includes('invalid login credentials')) return 'Feil e-post eller passord. Har du ikke laget passord ennå, logg inn med e-post først.';
   if (m.includes('rate limit') || error?.status === 429) return 'Det er sendt for mange e-poster den siste tiden. Prøv passord, eller vent litt.';
   if (m.includes('token has expired') || m.includes('invalid') && m.includes('otp')) return 'Koden er feil eller utløpt. Be om en ny.';
   if (m.includes('signups not allowed') || m.includes('user not found')) return 'Denne e-postadressen har ikke tilgang.';
@@ -2616,7 +2619,7 @@ function loginView(msg = '', mode = 'password') {
         <label class="field"><span>E-post</span><input id="login-email" name="email" type="email" required autocomplete="username" value="${email}" /></label>
         <label class="field"><span>Passord</span><input id="login-pw" name="password" type="password" required autocomplete="current-password" /></label>
         <button type="submit" class="btn btn--dark">Logg inn</button>
-        <button type="button" class="btn btn--ghost" id="to-code">Få engangskode på e-post i stedet</button>
+        <button type="button" class="btn btn--ghost" id="to-code">${OTP_CODE ? 'Få engangskode på e-post i stedet' : 'Få innloggingslenke på e-post i stedet'}</button>
         <p class="login-msg" role="status">${esc(msg)}</p>
       </form></div>`;
     $('#to-code').addEventListener('click', () => {
@@ -2640,9 +2643,9 @@ function loginView(msg = '', mode = 'password') {
   // mode === 'code'
   app.innerHTML = `<div class="login"><form class="login-card" id="login">
       ${brand}
-      <p>Vi sender en sekssifret kode til e-posten din. Tast den inn her – du trenger ikke trykke på noen lenke.</p>
+      <p>${OTP_CODE ? 'Vi sender en sekssifret kode til e-posten din. Tast den inn her – du trenger ikke trykke på noen lenke.' : 'Vi sender en innloggingslenke til e-posten din. Åpne den på samme enhet. Lag gjerne et passord etterpå, så slipper du e-post neste gang.'}</p>
       <label class="field"><span>E-post</span><input id="login-email" type="email" required autocomplete="username" value="${email}" /></label>
-      <button type="submit" class="btn btn--dark" id="send-code">Send kode</button>
+      <button type="submit" class="btn btn--dark" id="send-code">${OTP_CODE ? 'Send kode' : 'Send lenke'}</button>
       <div class="code-step" hidden>
         <label class="field"><span>Kode fra e-posten</span><input id="login-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="10" placeholder="123456" /></label>
         <button type="button" class="btn btn--dark" id="verify-code">Logg inn</button>
@@ -2676,6 +2679,11 @@ function loginView(msg = '', mode = 'password') {
     });
     btn.disabled = false;
     if (error) return ($('.login-msg').textContent = authError(error));
+    if (!OTP_CODE) {
+      btn.textContent = 'Send ny lenke';
+      $('.login-msg').textContent = `Lenken er sendt til ${em}. Sjekk søppelpost hvis den ikke kommer innen et minutt.`;
+      return;
+    }
     btn.textContent = 'Send ny kode';
     $('.code-step').hidden = false;
     $('#login-code').focus();

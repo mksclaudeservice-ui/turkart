@@ -19,7 +19,8 @@ Privat kart over toppturer og reiser for Markus og Karoline. Vite + vanilla JS +
 ## Innlogging
 - Hovedinnlogging: e-post + passord (`signInWithPassword`), lagres i nøkkelringen/Face ID.
 - Reserve: sekssifret engangskode på e-post (`signInWithOtp` med `shouldCreateUser: false` + `verifyOtp`).
-  E-postmalen «Magic Link» i Supabase må inneholde `{{ .Token }}`.
+  Krever egen SMTP i Supabase (malene er låst på innebygd e-post) og `{{ .Token }}` i malen «Magic link or OTP».
+  Til det er på plass er `OTP_CODE = false` i main.js, og reserven sender en innloggingslenke.
 - Etter innlogging uten passord vises «Lag et passord» (flagg `user_metadata.has_password`). Meny: «Passord».
 - Supabase sin innebygde e-post har lav grense (noen få per time); egen SMTP løfter den om det trengs.
 
