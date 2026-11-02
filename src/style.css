@@ -567,3 +567,8 @@ fieldset.visit-only { display: flex; flex-direction: column; gap: 10px; }
 .code-step[hidden] { display: none; }
 #login-code { font-size: 22px; letter-spacing: 0.3em; text-align: center; }
 .login-card > .field, .code-step > .field { flex: 0 0 auto; }
+
+/* Ny reise inne fra et skjema */
+.newtrip { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px dashed var(--line); border-radius: 12px; }
+.newtrip[hidden] { display: none; }
+.newtrip > .field { flex: 0 0 auto; }

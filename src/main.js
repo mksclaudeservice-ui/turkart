@@ -945,6 +945,46 @@ function tripOptions(selected) {
     .join('')}`;
 }
 
+// «+ Ny reise …» i en reisevelger: viser små felt i skjemaet, og reisen opprettes når skjemaet lagres.
+const NEW_TRIP_OPT = '<option value="__new">+ Ny reise …</option>';
+function newTripFields(key) {
+  return `<div class="newtrip" id="${key}-new" hidden>
+    <label class="field"><span>Navn på ny reise</span><input id="${key}-new-title" placeholder="F.eks. Lofoten" /></label>
+    <div class="field-row">
+      <label class="field"><span>Fra</span><input id="${key}-new-start" type="date" /></label>
+      <label class="field"><span>Til</span><input id="${key}-new-end" type="date" /></label>
+    </div></div>`;
+}
+function wireNewTrip(d, key, dateSel) {
+  const sel = $(`#${key}`, d);
+  if (!sel) return;
+  sel.addEventListener('change', () => {
+    const on = sel.value === '__new';
+    $(`#${key}-new`, d).hidden = !on;
+    if (!on) return;
+    const day = dateSel && $(dateSel, d)?.value;
+    if (day) {
+      if (!$(`#${key}-new-start`, d).value) $(`#${key}-new-start`, d).value = day;
+      if (!$(`#${key}-new-end`, d).value) $(`#${key}-new-end`, d).value = day;
+    }
+    $(`#${key}-new-title`, d).focus();
+  });
+}
+/** Returnerer reise-id for velgeren; oppretter reisen først hvis «Ny reise» er valgt. */
+async function resolveTrip(d, key) {
+  const val = $(`#${key}`, d)?.value || '';
+  if (val !== '__new') return val || null;
+  const title = $(`#${key}-new-title`, d).value.trim();
+  if (!title) throw new Error('Gi den nye reisen et navn.');
+  const start = $(`#${key}-new-start`, d).value || null;
+  const { data, error } = await supabase.from('trips')
+    .insert({ title, start_date: start, end_date: $(`#${key}-new-end`, d).value || start, status: 'done', countries: [] })
+    .select('id').single();
+  if (error) throw error;
+  await setLinks('trip_people', 'trip_id', data.id, meIds());
+  return data.id;
+}
+
 function placeForm(existing = null, preset = {}) {
   const p = existing ?? { mode: state.mode, kind: state.mode === 'fjell' ? 'topptur' : 'sted', status: 'visited', ...preset };
   const kinds = state.mode === 'fjell' || p.mode === 'fjell' ? ['topptur', 'skitur', 'toppskitur', 'fjelltur', 'sykkeltur', 'padletur', 'klatring', 'utsikt', 'hytte', 'sted'] : ['sted', 'by', 'overnatting', 'utsikt', 'topptur'];
@@ -980,8 +1020,9 @@ function placeForm(existing = null, preset = {}) {
       ${existing ? '' : `<fieldset class="visit-only"><legend>Første besøk</legend>
         <div class="field-row">
           <label class="field"><span>Dato</span><input id="pf-date" type="date" value="${preset.date ?? ''}" /></label>
-          <label class="field"><span>Reise</span><select id="pf-trip">${tripOptions(preset.trip_id)}</select></label>
+          <label class="field"><span>Reise</span><select id="pf-trip">${tripOptions(preset.trip_id)}${NEW_TRIP_OPT}</select></label>
         </div>
+        ${newTripFields('pf-trip')}
         ${peoplePicker('pf-people', meIds())}
       </fieldset>`}
       <label class="field"><span>Notat</span><textarea id="pf-notes" rows="3">${esc(p.notes ?? '')}</textarea></label>
@@ -989,6 +1030,7 @@ function placeForm(existing = null, preset = {}) {
     </form>`,
     (d) => {
       const form = $('#place-form', d);
+      wireNewTrip(d, 'pf-trip', '#pf-date');
       wirePeoplePicker(d);
       const statusSel = $('#pf-status', d);
       const updatePreview = mountPreview($('#pf-preview', d), parseFloat(p.lat), parseFloat(p.lon));
@@ -1046,8 +1088,9 @@ function placeForm(existing = null, preset = {}) {
         e.preventDefault();
         const data = collectPlace(d);
         if (Number.isNaN(data.lat) || Number.isNaN(data.lon)) return toast('Sett en gyldig posisjon.', 'err');
-        const { date, trip_id, ...row } = data;
+        const { date, trip_id: _t, ...row } = data;
         try {
+          const trip_id = existing ? null : await resolveTrip(d, 'pf-trip');
           let id = existing?.id;
           let visitId = null;
           const people = pickedPeople(d, 'pf-people');
@@ -1108,8 +1151,9 @@ function visitForm(place, existing = null) {
       <div class="dlg-head"><h2>${existing ? 'Endre besøk' : 'Besøk'} – ${esc(place.name)}</h2><button type="button" class="icon-btn" data-action="close-dlg" aria-label="Lukk">${ICON.close}</button></div>
       <div class="field-row">
         <label class="field"><span>Dato</span><input id="vf-date" type="date" value="${v0.visited_on ?? ''}" /></label>
-        <label class="field"><span>Del av reise</span><select id="vf-trip">${tripOptions(v0.trip_id)}</select></label>
+        <label class="field"><span>Del av reise</span><select id="vf-trip">${tripOptions(v0.trip_id)}${NEW_TRIP_OPT}</select></label>
       </div>
+      ${newTripFields('vf-trip')}
       ${peoplePicker('vf-people', existing ? v0.people ?? [] : meIds())}
       <div class="field-row">
         <label class="field"><span>Lengde (km)</span><input id="vf-km" inputmode="decimal" value="${v0.distance_km ?? ''}" /></label>
@@ -1128,6 +1172,7 @@ function visitForm(place, existing = null) {
     </form>`,
     (d) => {
       wirePeoplePicker(d);
+      wireNewTrip(d, 'vf-trip', '#vf-date');
       d.querySelectorAll('[data-del-track]').forEach((b) =>
         b.addEventListener('click', async () => {
           const { error } = await supabase.from('tracks').delete().eq('id', b.dataset.delTrack);
@@ -1199,13 +1244,13 @@ function visitForm(place, existing = null) {
         const v = (id) => $(id, d).value.trim();
         const row = {
           visited_on: v('#vf-date') || null,
-          trip_id: v('#vf-trip') || null,
           distance_km: v('#vf-km') ? parseFloat(v('#vf-km').replace(',', '.')) : null,
           ascent_m: v('#vf-hm') ? parseInt(v('#vf-hm'), 10) : null,
           duration_min: v('#vf-min') ? parseInt(v('#vf-min'), 10) : null,
           notes: v('#vf-notes') || null
         };
         try {
+          row.trip_id = await resolveTrip(d, 'vf-trip');
           let id = existing?.id;
           if (existing) {
             const { error } = await supabase.from('visits').update(row).eq('id', id);
