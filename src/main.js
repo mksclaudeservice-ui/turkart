@@ -49,6 +49,7 @@ const KIND_LABEL = {
   sted: 'Sted', by: 'By', overnatting: 'Overnatting'
 };
 const ICON = {
+  lock: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>',
   mountain: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 20l6-11 4 6 2-3 6 8z"/></svg>',
   plane: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 16l20-6-3-3-7 2-5-5-2 1 3 6-4 1-2-2-1 1z"/></svg>',
   plus: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
@@ -514,6 +515,7 @@ function renderShell() {
               <a class="menu-link" href="${ADMIN.auth}" target="_blank" rel="noopener">${ICON.plane}<span>Innlogging og tilgang<small>Supabase Auth</small></span></a>
             </div>
             <button type="button" class="menu-link menu-link--btn" data-action="people">${ICON.users}<span>Personer<small>Navn og profilbilder</small></span></button>
+            <button type="button" class="menu-link menu-link--btn" data-action="password">${ICON.lock}<span>Passord<small>Lag eller endre passord</small></span></button>
             <button type="button" class="btn btn--ghost" data-action="signout">Logg ut</button>
           </div>
         </div>
@@ -2547,6 +2549,8 @@ document.addEventListener('click', async (e) => {
   else if (a === 'cancel-pick') {
     state.picking = null;
     $('#pick-banner').hidden = true;
+  } else if (a === 'password') {
+    passwordDialog(!state.session?.user?.user_metadata?.has_password);
   } else if (a === 'signout') {
     await supabase.auth.signOut();
   }
@@ -2588,28 +2592,122 @@ function addMenu() {
 }
 
 // ---------- auth ----------
-function loginView(msg = '') {
-  app.innerHTML = `
-    <div class="login">
-      <form class="login-card" id="login">
-        <div class="brand brand--big">${ICON.mountain}<span>Turkart</span></div>
-        <p>Logg inn med e-post. Du får en lenke som logger deg inn – ingen passord.</p>
-        <label class="field"><span>E-post</span><input id="login-email" type="email" required autocomplete="email" /></label>
-        <button type="submit" class="btn btn--dark">Send innloggingslenke</button>
-        <p class="login-msg" role="status">${msg}</p>
-      </form>
-    </div>`;
+// Passord er hovedinnlogging (lagres i nøkkelringen, Face ID fyller inn).
+// Engangskode på e-post er reserve – koden tastes inn i appen, så det virker også fra hjemskjermen.
+const LAST_EMAIL = 'turkart.email';
+const lastEmail = () => { try { return localStorage.getItem(LAST_EMAIL) || ''; } catch { return ''; } };
+const rememberEmail = (e) => { try { localStorage.setItem(LAST_EMAIL, e); } catch {} };
+
+function authError(error) {
+  const m = (error?.message || '').toLowerCase();
+  if (m.includes('invalid login credentials')) return 'Feil e-post eller passord. Har du ikke laget passord ennå, bruk engangskode.';
+  if (m.includes('rate limit') || error?.status === 429) return 'Det er sendt for mange e-poster den siste tiden. Prøv passord, eller vent litt.';
+  if (m.includes('token has expired') || m.includes('invalid') && m.includes('otp')) return 'Koden er feil eller utløpt. Be om en ny.';
+  if (m.includes('signups not allowed') || m.includes('user not found')) return 'Denne e-postadressen har ikke tilgang.';
+  return error?.message || 'Noe gikk galt.';
+}
+
+function loginView(msg = '', mode = 'password') {
+  const email = esc(lastEmail());
+  const brand = `<div class="brand brand--big">${ICON.mountain}<span>Turkart</span></div>`;
+  if (mode === 'password') {
+    app.innerHTML = `<div class="login"><form class="login-card" id="login" method="post" action="#">
+        ${brand}
+        <label class="field"><span>E-post</span><input id="login-email" name="email" type="email" required autocomplete="username" value="${email}" /></label>
+        <label class="field"><span>Passord</span><input id="login-pw" name="password" type="password" required autocomplete="current-password" /></label>
+        <button type="submit" class="btn btn--dark">Logg inn</button>
+        <button type="button" class="btn btn--ghost" id="to-code">Få engangskode på e-post i stedet</button>
+        <p class="login-msg" role="status">${esc(msg)}</p>
+      </form></div>`;
+    $('#to-code').addEventListener('click', () => {
+      rememberEmail($('#login-email').value.trim());
+      loginView('', 'code');
+    });
+    if (email) $('#login-pw').focus();
+    $('#login').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const em = $('#login-email').value.trim();
+      const btn = e.target.querySelector('button[type=submit]');
+      btn.disabled = true;
+      $('.login-msg').textContent = 'Logger inn …';
+      rememberEmail(em);
+      const { error } = await supabase.auth.signInWithPassword({ email: em, password: $('#login-pw').value });
+      btn.disabled = false;
+      if (error) $('.login-msg').textContent = authError(error);
+    });
+    return;
+  }
+  // mode === 'code'
+  app.innerHTML = `<div class="login"><form class="login-card" id="login">
+      ${brand}
+      <p>Vi sender en sekssifret kode til e-posten din. Tast den inn her – du trenger ikke trykke på noen lenke.</p>
+      <label class="field"><span>E-post</span><input id="login-email" type="email" required autocomplete="username" value="${email}" /></label>
+      <button type="submit" class="btn btn--dark" id="send-code">Send kode</button>
+      <div class="code-step" hidden>
+        <label class="field"><span>Kode fra e-posten</span><input id="login-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="10" placeholder="123456" /></label>
+        <button type="button" class="btn btn--dark" id="verify-code">Logg inn</button>
+      </div>
+      <button type="button" class="btn btn--ghost" id="to-pw">Tilbake til passord</button>
+      <p class="login-msg" role="status">${esc(msg)}</p>
+    </form></div>`;
+  $('#to-pw').addEventListener('click', () => loginView('', 'password'));
+  const verify = async () => {
+    const em = $('#login-email').value.trim();
+    const token = $('#login-code').value.replace(/\D/g, '');
+    if (token.length < 6) return;
+    $('#verify-code').disabled = true;
+    $('.login-msg').textContent = 'Sjekker koden …';
+    const { error } = await supabase.auth.verifyOtp({ email: em, token, type: 'email' });
+    $('#verify-code').disabled = false;
+    if (error) $('.login-msg').textContent = authError(error);
+  };
+  $('#verify-code').addEventListener('click', verify);
+  $('#login-code').addEventListener('input', (e) => { if (e.target.value.replace(/\D/g, '').length === 6) verify(); });
   $('#login').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const email = $('#login-email').value.trim();
-    const btn = e.target.querySelector('button');
+    if (!$('.code-step').hidden) return verify();
+    const em = $('#login-email').value.trim();
+    rememberEmail(em);
+    const btn = $('#send-code');
     btn.disabled = true;
-    const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin + import.meta.env.BASE_URL } });
+    const { error } = await supabase.auth.signInWithOtp({
+      email: em,
+      options: { shouldCreateUser: false, emailRedirectTo: location.origin + import.meta.env.BASE_URL }
+    });
     btn.disabled = false;
-    $('.login-msg').textContent = error
-      ? `Kunne ikke sende lenke: ${error.message}`
-      : `Sjekk innboksen til ${email} og trykk på lenken.`;
+    if (error) return ($('.login-msg').textContent = authError(error));
+    btn.textContent = 'Send ny kode';
+    $('.code-step').hidden = false;
+    $('#login-code').focus();
+    $('.login-msg').textContent = `Koden er sendt til ${em}. Sjekk søppelpost hvis den ikke kommer innen et minutt.`;
   });
+}
+
+function passwordDialog(first = false) {
+  const em = esc(userEmail());
+  openDialog(
+    `<form id="pw-form" class="form" method="post" action="#">
+      <div class="dlg-head"><h2>${first ? 'Lag et passord' : 'Endre passord'}</h2>
+      <button type="button" class="icon-btn" data-action="close-dlg" aria-label="Lukk">${ICON.close}</button></div>
+      <p class="muted">${first ? 'Da logger du inn med passord neste gang, og telefonen kan fylle det inn med Face ID. Ingen flere e-poster.' : 'Lagre det nye passordet i nøkkelringen når telefonen spør.'}</p>
+      <input type="email" name="username" autocomplete="username" value="${em}" hidden />
+      <label class="field"><span>Nytt passord (minst 8 tegn)</span><input id="pw-new" type="password" autocomplete="new-password" minlength="8" required /></label>
+      <p class="login-msg" id="pw-msg" role="status"></p>
+      <div class="dlg-actions"><button type="button" class="btn btn--ghost" data-action="close-dlg">${first ? 'Senere' : 'Avbryt'}</button><button type="submit" class="btn btn--dark">Lagre passord</button></div>
+    </form>`,
+    (d) => {
+      d.querySelector('#pw-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const btn = e.target.querySelector('button[type=submit]');
+        btn.disabled = true;
+        const { error } = await supabase.auth.updateUser({ password: $('#pw-new').value, data: { has_password: true } });
+        btn.disabled = false;
+        if (error) return ($('#pw-msg').textContent = authError(error));
+        closeDialog();
+        toast('Passordet er lagret');
+      });
+    }
+  );
 }
 
 function noAccessView() {
@@ -2629,6 +2727,7 @@ async function start(session) {
   const { data: member, error } = await supabase.rpc('is_member');
   if (error || !member) return noAccessView();
   renderShell();
+  if (!session.user?.user_metadata?.has_password) setTimeout(() => passwordDialog(true), 400);
   try {
     await loadData();
     render({ fit: true });
@@ -2641,6 +2740,7 @@ if (!configured) setupView();
 else {
   let current;
   supabase.auth.onAuthStateChange((_event, session) => {
+    if (session) state.session = session; // f.eks. etter at passord er satt
     const uid = session?.user?.id ?? null;
     if (uid === current) return;
     current = uid;

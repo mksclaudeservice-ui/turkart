@@ -16,6 +16,13 @@ Privat kart over toppturer og reiser for Markus og Karoline. Vite + vanilla JS +
 - Tilgang styres av `public.allowed_users` + RLS-policy `members_all` på alle tabeller.
 - Tabeller: places, visits, trips, photos, notes, allowed_users. Bildebøtte: `photos` (privat).
 
+## Innlogging
+- Hovedinnlogging: e-post + passord (`signInWithPassword`), lagres i nøkkelringen/Face ID.
+- Reserve: sekssifret engangskode på e-post (`signInWithOtp` med `shouldCreateUser: false` + `verifyOtp`).
+  E-postmalen «Magic Link» i Supabase må inneholde `{{ .Token }}`.
+- Etter innlogging uten passord vises «Lag et passord» (flagg `user_metadata.has_password`). Meny: «Passord».
+- Supabase sin innebygde e-post har lav grense (noen få per time); egen SMTP løfter den om det trengs.
+
 ## Brukere
 - E-postadresser skal ikke ligge i koden eller repoet. De ligger i `allowed_users` (tilgang, `is_admin`)
   og `people.emails` (kobling person ↔ innlogging). Endres i SQL Editor eller i appen.

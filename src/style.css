@@ -561,3 +561,9 @@ fieldset.visit-only { display: flex; flex-direction: column; gap: 10px; }
 .mis-card p { margin: 0; font-size: 14px; }
 .mis-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .lb-hint { display: block; max-width: 220px; padding: 6px 10px; border: 0; border-radius: 8px; background: #e59a68; color: #1b130d; font: 600 12px/1.35 var(--font-body); text-align: left; cursor: pointer; }
+
+/* Innlogging: passord + engangskode */
+.code-step { display: flex; flex-direction: column; gap: 14px; }
+.code-step[hidden] { display: none; }
+#login-code { font-size: 22px; letter-spacing: 0.3em; text-align: center; }
+.login-card > .field, .code-step > .field { flex: 0 0 auto; }
