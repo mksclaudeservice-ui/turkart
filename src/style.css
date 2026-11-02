@@ -577,3 +577,14 @@ fieldset.visit-only { display: flex; flex-direction: column; gap: 10px; }
 @media (pointer: coarse) {
   input, select, textarea, .prow-emails { font-size: max(16px, 1em); }
 }
+
+/* Lagre-knappene ligger alltid synlig nederst i dialogen */
+.dlg-inner > .form > .dlg-actions:last-child {
+  position: sticky; bottom: 0; z-index: 2;
+  margin: 8px -20px -20px; padding: 12px 20px calc(12px + env(safe-area-inset-bottom));
+  background: var(--surface); border-top: 1px solid var(--line);
+}
+@media (max-width: 480px) {
+  .dlg-inner > .form > .dlg-actions:last-child { flex-wrap: nowrap; gap: 6px; }
+  .dlg-inner > .form > .dlg-actions:last-child .btn { padding-inline: 12px; white-space: nowrap; }
+}
