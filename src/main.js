@@ -540,7 +540,7 @@ function renderShell() {
   <dialog id="dlg" class="dlg"></dialog>
   <div class="lightbox" id="lightbox" hidden></div>`;
   state.map = new TurMap($('#map'), {
-    onPlaceClick: (p) => select('place', p.id),
+    onPlaceClick: (p) => { state.back = []; select('place', p.id); },
     onPinShown: (el) => hydrateThumbs(el),
     onMapClick: (ll) => {
       if (state.picking) {
@@ -2510,9 +2510,18 @@ document.addEventListener('click', async (e) => {
   }
   if (a === 'side-open') return setSide(true);
   if (a === 'side-close') return setSide(false);
-  if (isMobile() && (a === 'select-place' || a === 'select-trip') && t.closest('.side')) setSide(false);
+  if (a === 'select-place' || a === 'select-trip') {
+    // Husk hvor vi kom fra, så krysset går ett steg tilbake i stedet for rett til kartet.
+    if (t.closest('.side')) {
+      state.back = isMobile() ? [{ list: true, scroll: $('#side')?.scrollTop ?? 0 }] : [];
+      if (isMobile()) setSide(false);
+    } else if (t.closest('#detail') && state.selected && state.selected.id !== id) {
+      state.back = [...(state.back ?? []), { ...state.selected }];
+    }
+  }
   if (a === 'mode') {
     state.mode = t.dataset.mode;
+    state.back = [];
     state.selected = null;
     state.map.setMode(state.mode);
     render({ fit: true });
@@ -2525,8 +2534,19 @@ document.addEventListener('click', async (e) => {
     state.map.setMode('reise');
     select('trip', id);
   } else if (a === 'close-detail') {
+    const prev = (state.back ?? []).pop();
+    if (prev && !prev.list) {
+      if (prev.type === 'trip' && state.mode !== 'reise') { state.mode = 'reise'; state.map.setMode('reise'); }
+      return select(prev.type, prev.id);
+    }
+    state.back = [];
     state.selected = null;
     render();
+    if (prev?.list) {
+      setSide(true);
+      const side = $('#side');
+      if (side) side.scrollTop = prev.scroll ?? 0;
+    }
   } else if (a === 'add') state.mode === 'fjell' ? placeForm() : addMenu();
   else if (a === 'add-place-reise') placeForm(null, { mode: 'reise', kind: 'sted' });
   else if (a === 'trip-stop') selectTripStop(id);
