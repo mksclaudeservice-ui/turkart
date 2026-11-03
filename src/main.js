@@ -63,6 +63,7 @@ const ICON = {
   chevronRight: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>',
   chevronLeft: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>',
   pin: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>',
+  car: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 17h14v-5l-2-5H7l-2 5z"/><path d="M5 12h14"/><circle cx="8" cy="17" r="1.8"/><circle cx="16" cy="17" r="1.8"/></svg>',
   route: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h7a3.5 3.5 0 0 0 0-7H9a3.5 3.5 0 0 1 0-7h7"/></svg>',
   move: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M15 8l4 4-4 4M9 4H5v16h4"/></svg>',
   trash: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>',
@@ -86,6 +87,13 @@ const state = {
       return localStorage.getItem('turkart.showTracks') === '1';
     } catch {
       return false;
+    }
+  })(),
+  showRoutes: (() => {
+    try {
+      return localStorage.getItem('turkart.showRoutes') !== '0';
+    } catch {
+      return true;
     }
   })(),
   showPins: (() => {
@@ -474,6 +482,45 @@ function redrawTrip(trip) {
     if (el) el.textContent = l.points ? fmtLeg(l) : 'Beregner rute …';
   }
 }
+/** Rutene som vises på hovedkartet i reisevisning når ingen reise er åpen. */
+function overviewRoutes(selTrip = null) {
+  if (state.mode !== 'reise' || selTrip || !state.showRoutes) return [];
+  return visibleTrips()
+    .map((t) => {
+      const stops = orderedStops(t);
+      return { id: t.id, title: t.title, trip: t, stops, legs: tripLegs(t, stops) };
+    })
+    .filter((r) => r.stops.length > 1);
+}
+function refreshOverviewRoutes() {
+  const open = state.selected?.type === 'trip' || (!state.selected && state.tripOnMap);
+  state.map?.renderRoutes(open ? [] : overviewRoutes());
+}
+let overviewJob = null;
+/** Beregn manglende etapper for reisene på hovedkartet, én reise om gangen, og tegn om etter hver. */
+function ensureOverviewLegs(routes) {
+  const missing = routes.filter((r) => r.legs.some((l) => !l.points)).map((r) => r.trip);
+  if (!missing.length || overviewJob) return;
+  overviewJob = (async () => {
+    for (const t of missing) {
+      const stops = orderedStops(t);
+      for (const l of tripLegs(t, stops)) {
+        if (l.points) continue;
+        const key = legKey(t.id, l.a.id, l.b.id);
+        if (legJobs.has(key)) continue;
+        legJobs.add(key);
+        try {
+          await saveLeg(t, l.a, l.b, l.mode);
+        } catch (err) {
+          console.warn(err);
+        } finally {
+          legJobs.delete(key);
+        }
+      }
+      refreshOverviewRoutes();
+    }
+  })().finally(() => { overviewJob = null; });
+}
 function legRow(l) {
   const opts = Object.entries(LEG_MODES).map(([k, m]) => `<option value="${k}" ${k === l.mode ? 'selected' : ''}>${m.label}</option>`).join('');
   return `<div class="leg-row">
@@ -565,6 +612,7 @@ function renderShell() {
         <div class="map-tools">
           <button type="button" class="side-toggle" data-action="side-open" aria-controls="side" aria-expanded="false">${ICON.list}<span id="side-toggle-label">Turer</span></button>
           <button type="button" class="map-chip" data-action="toggle-tracks" aria-pressed="${state.showAllTracks}" title="Vis spor for alle turer på kartet">${ICON.route}<span>Spor</span></button>
+          <button type="button" class="map-chip map-chip--routes" data-action="toggle-routes" aria-pressed="${state.showRoutes}" title="Vis reiseruter (bil, fly, ferje …) for alle reiser på kartet">${ICON.car}<span>Ruter</span></button>
           <button type="button" class="map-chip" data-action="toggle-pins" aria-pressed="${state.showPins}" title="Vis eller skjul nålene på kartet">${ICON.pin}<span>Nåler</span></button>
           <button type="button" class="map-chip map-chip--trip" data-action="clear-trip-map" hidden></button>
         </div>
@@ -578,6 +626,7 @@ function renderShell() {
   state.map = new TurMap($('#map'), {
     onPlaceClick: (p) => { state.back = []; select('place', p.id); },
     onPinShown: (el) => hydrateThumbs(el),
+    onRouteClick: (id) => { state.back = []; select('trip', id); },
     onMapClick: (ll) => {
       if (state.picking) {
         const cb = state.picking;
@@ -625,10 +674,7 @@ function render({ fit = false } = {}) {
     tripChip.setAttribute('aria-label', 'Vis alle reiser igjen');
   }
   const places = selTrip ? [] : visiblePlaces();
-  const routes =
-    state.mode === 'reise' && !selTrip
-      ? visibleTrips().map((t) => tripStops(t).filter((p) => p.mode === 'reise').sort((a, b) => (a.lastVisit ?? '').localeCompare(b.lastVisit ?? '')))
-      : [];
+  const routes = overviewRoutes(selTrip);
   for (const p of places) {
     const c = placeCover(p);
     p.pinThumb = c ? c.thumb_path : null;
@@ -637,6 +683,8 @@ function render({ fit = false } = {}) {
   state.map.render(places, { selectedId: state.selected?.type === 'place' ? state.selected.id : null, routes });
   state.map.setPinsVisible(state.showPins);
   $('[data-action="toggle-pins"]')?.setAttribute('aria-pressed', String(state.showPins));
+  $('[data-action="toggle-routes"]')?.setAttribute('aria-pressed', String(state.showRoutes));
+  if (routes.length) ensureOverviewLegs(routes);
   if (selTrip) {
     const stops = orderedStops(selTrip);
     state.map.showTrip(stops, { activeId: state.tripStop, legs: tripLegs(selTrip, stops), onStopClick: selectTripStop });
@@ -2533,6 +2581,17 @@ document.addEventListener('click', async (e) => {
     toast(state.showAllTracks ? 'Viser spor for alle turer' : 'Viser spor bare for åpen tur');
     return;
   }
+  if (a === 'toggle-routes') {
+    state.showRoutes = !state.showRoutes;
+    try {
+      localStorage.setItem('turkart.showRoutes', state.showRoutes ? '1' : '0');
+    } catch {}
+    t.setAttribute('aria-pressed', String(state.showRoutes));
+    refreshOverviewRoutes();
+    if (state.showRoutes) ensureOverviewLegs(overviewRoutes());
+    toast(state.showRoutes ? 'Viser reiseruter' : 'Reiserutene er skjult');
+    return;
+  }
   if (a === 'toggle-pins') {
     state.showPins = !state.showPins;
     try {
@@ -2540,8 +2599,17 @@ document.addEventListener('click', async (e) => {
     } catch {}
     state.map.setPinsVisible(state.showPins);
     t.setAttribute('aria-pressed', String(state.showPins));
-    // Uten nåler er det sporene man vil se, så slå dem på samtidig.
-    if (!state.showPins && !state.showAllTracks) {
+    // Uten nåler er det rutene/sporene man vil se, så slå dem på samtidig.
+    if (!state.showPins && state.mode === 'reise' && !state.showRoutes) {
+      state.showRoutes = true;
+      try {
+        localStorage.setItem('turkart.showRoutes', '1');
+      } catch {}
+      $('[data-action="toggle-routes"]')?.setAttribute('aria-pressed', 'true');
+      refreshOverviewRoutes();
+      ensureOverviewLegs(overviewRoutes());
+      toast('Nålene er skjult, og reiserutene vises');
+    } else if (!state.showPins && state.mode === 'fjell' && !state.showAllTracks) {
       state.showAllTracks = true;
       try {
         localStorage.setItem('turkart.showTracks', '1');

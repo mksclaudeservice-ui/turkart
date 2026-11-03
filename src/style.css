@@ -547,6 +547,9 @@ fieldset.visit-only { display: flex; flex-direction: column; gap: 10px; }
 .leg-mode { min-height: 36px; padding: 4px 28px 4px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: 500 13px/1 var(--font-body); }
 .leg-info { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 .map-chip--trip { gap: 8px; }
+.map-chip--routes[aria-pressed='true'] { border-color: var(--reise); }
+.map-chip--routes[aria-pressed='true'] svg { color: var(--reise); }
+.shell[data-mode='fjell'] .map-chip--routes { display: none; }
 .map-chip--trip[hidden] { display: none; }
 .leaflet-marker-icon.pin-num { display: flex; }
 

@@ -198,7 +198,7 @@ export function miniMapTrack(el, points, { color = '#d1461f', lines = null } = {
 }
 
 export class TurMap {
-  constructor(el, { onPlaceClick, onMapClick, onPinShown }) {
+  constructor(el, { onPlaceClick, onMapClick, onPinShown, onRouteClick }) {
     this.map = L.map(el, { zoomControl: false, worldCopyJump: true }).setView([64.5, 12], 5);
     L.control.zoom({ position: 'bottomright' }).addTo(this.map);
     this.layers = Object.fromEntries(Object.entries(LAYERS).map(([k, v]) => [k, v.layer()]));
@@ -219,6 +219,7 @@ export class TurMap {
     this.tracks = null;
     this.onPlaceClick = onPlaceClick;
     this.onPinShown = onPinShown;
+    this.onRouteClick = onRouteClick;
     this.map.on('click', (e) => onMapClick?.(e.latlng));
   }
 
@@ -235,11 +236,7 @@ export class TurMap {
 
   render(places, { selectedId, routes = [] } = {}) {
     this.markers.clearLayers();
-    this.routes.clearLayers();
-    for (const r of routes) {
-      if (r.length > 1)
-        L.polyline(r.map((p) => [p.lat, p.lon]), { color: '#2B5C8A', weight: 3, dashArray: '6 6' }).addTo(this.routes);
-    }
+    this.renderRoutes(routes);
     for (const p of places) {
       let icon;
       if (p.pinThumb) {
@@ -259,6 +256,40 @@ export class TurMap {
         .on('add', (e) => { const el = e.target.getElement(); if (el) this.onPinShown?.(el); })
         .addTo(this.markers);
     }
+  }
+
+  /** Reiseruter for alle synlige reiser: hver etappe tegnes langs veien (eller som bue for fly), uten nummererte stopp.
+   *  routes: [{ id, title, stops, legs }]. */
+  renderRoutes(routes = []) {
+    this.routes.clearLayers();
+    const color = '#2B5C8A';
+    for (const r of routes) {
+      const { stops, legs = [] } = r;
+      if (!stops || stops.length < 2) continue;
+      const group = L.featureGroup().addTo(this.routes);
+      for (let i = 1; i < stops.length; i++) {
+        const leg = legs[i - 1];
+        const pts = leg?.points?.length > 1 ? leg.points : [[stops[i - 1].lat, stops[i - 1].lon], [stops[i].lat, stops[i].lon]];
+        const st = LEG_STYLE[leg?.mode] ?? LEG_STYLE.bil;
+        const pending = !leg?.points;
+        L.polyline(pts, { color: '#fff', weight: st.weight + 3, opacity: pending ? 0.4 : 0.85, interactive: false, lineJoin: 'round', lineCap: 'round' }).addTo(group);
+        L.polyline(pts, { color, weight: st.weight, dashArray: pending ? '2 6' : st.dashArray, opacity: pending ? 0.45 : 0.9, lineJoin: 'round', lineCap: 'round' }).addTo(group);
+      }
+      // Små prikker på stoppene, så man ser hvor reisen stanset.
+      const seen = new Set();
+      for (const s of stops) {
+        if (seen.has(s.id)) continue;
+        seen.add(s.id);
+        L.circleMarker([s.lat, s.lon], { radius: 3.5, color: '#fff', weight: 1.5, fillColor: color, fillOpacity: 1 }).addTo(group);
+      }
+      if (r.title) group.bindTooltip(r.title, { sticky: true, direction: 'top' });
+      group.on('click', (e) => { L.DomEvent.stopPropagation(e); this.onRouteClick?.(r.id); });
+    }
+  }
+
+  setRoutesVisible(on) {
+    if (on && !this.map.hasLayer(this.routes)) this.routes.addTo(this.map);
+    if (!on && this.map.hasLayer(this.routes)) this.map.removeLayer(this.routes);
   }
 
   showTrip(stops, { activeId = null, legs = [], onStopClick } = {}) {
