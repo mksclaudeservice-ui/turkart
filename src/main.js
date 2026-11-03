@@ -357,36 +357,39 @@ function orderedStops(trip) {
     if (!v.visited_on) return null;
     const p = placeById.get(v.place_id);
     const ts = (p.photoList ?? [])
-      .filter((ph) => ph.taken_at && (ph.visit_id === v.id || (!ph.visit_id && ph.taken_at.slice(0, 10) === v.visited_on)))
+      .filter((ph) => ph.taken_at && ph.taken_at.slice(0, 10) === v.visited_on && (ph.visit_id === v.id || !ph.visit_id))
       .map((ph) => ph.taken_at)
       .sort();
     return ts[0] ?? null;
   };
-  const dated = visits.filter((v) => v.visited_on).map((v) => ({ v, t: timeOf(v) }));
+  const dated = visits.filter((v) => v.visited_on || v.trip_role).map((v) => ({ v: v.visited_on ? v : { ...v, visited_on: '' }, t: timeOf(v) }));
   const firstDay = new Map();
   for (const x of dated) {
     const d = firstDay.get(x.v.place_id);
     if (!d || x.v.visited_on < d) firstDay.set(x.v.place_id, x.v.visited_on);
   }
+  const roleRank = (v) => (v.trip_role === 'start' ? 0 : v.trip_role === 'end' ? 2 : 1);
   dated.sort((a, b) => {
+    // Besøk merket som start/slutt på reisen går foran alt annet.
+    if (roleRank(a.v) !== roleRank(b.v)) return roleRank(a.v) - roleRank(b.v);
     if (a.v.visited_on !== b.v.visited_on) return a.v.visited_on.localeCompare(b.v.visited_on);
-    if (a.t && b.t) return a.t.localeCompare(b.t);
-    // Samme dag uten klokkeslett: et sted dere har vært tidligere på reisen (hjemreise) kommer sist.
+    // Samme dag: et sted dere har vært tidligere på reisen (hjemreise) kommer sist.
     const ra = firstDay.get(a.v.place_id) < a.v.visited_on ? 1 : 0;
     const rb = firstDay.get(b.v.place_id) < b.v.visited_on ? 1 : 0;
     if (ra !== rb) return ra - rb;
+    if (a.t && b.t) return a.t.localeCompare(b.t);
     if (a.t || b.t) return a.t ? -1 : 1;
     return placeById.get(a.v.place_id).name.localeCompare(placeById.get(b.v.place_id).name, 'nb');
   });
   const seq = [];
   for (const { v } of dated) {
     const last = seq[seq.length - 1];
-    if (last && last.p.id === v.place_id) last.last = v.visited_on;
-    else seq.push({ p: placeById.get(v.place_id), first: v.visited_on, last: v.visited_on });
+    if (last && last.p.id === v.place_id && (last.role ?? null) === (v.trip_role ?? null)) last.last = v.visited_on || last.last;
+    else seq.push({ p: placeById.get(v.place_id), first: v.visited_on || null, last: v.visited_on || null, role: v.trip_role ?? null });
   }
   // Steder på reisen uten dato kommer til slutt, én gang.
   const seen = new Set(seq.map((x) => x.p.id));
-  const undated = [...new Set(visits.filter((v) => !v.visited_on).map((v) => v.place_id))]
+  const undated = [...new Set(visits.filter((v) => !v.visited_on && !v.trip_role).map((v) => v.place_id))]
     .filter((id) => !seen.has(id))
     .map((id) => placeById.get(id))
     .sort((a, b) => a.name.localeCompare(b.name, 'nb'));
@@ -400,6 +403,7 @@ function orderedStops(trip) {
     return {
       id: x.p.id,
       n: i + 1,
+      role: x.role ?? null,
       nLabel: nums.get(x.p.id).join('·'),
       name: x.p.name,
       lat: x.p.lat,
@@ -951,7 +955,7 @@ function tripDetail(t) {
       <button type="button" class="btn btn--link btn--xs" data-action="link-tours" data-id="${t.id}">${ICON.link}Koble til turer</button></div>
     ${ordered.length ? (() => {
       const legs = tripLegs(t, ordered);
-      return ordered.map((s, i) => `${i > 0 ? legRow(legs[i - 1]) : ''}<div class="stop-row"><span class="stop-num">${s.n}</span>${placeRow(s.place, s.when)}</div>`).join('');
+      return ordered.map((s, i) => `${i > 0 ? legRow(legs[i - 1]) : ''}<div class="stop-row"><span class="stop-num">${s.n}</span>${placeRow(s.place, [s.role === 'start' ? 'Start' : s.role === 'end' ? 'Slutt' : '', s.when].filter(Boolean).join(' · '))}</div>`).join('');
     })() : '<p class="muted">Ingen stopp ennå. Legg til et sted, eller koble til turer dere gikk på reisen.</p>'}
     <h3 class="eyebrow" id="trip-photos">Bilder</h3>
     ${photoGrid(photos)}
@@ -1186,6 +1190,11 @@ function visitForm(place, existing = null) {
         <label class="field"><span>Del av reise</span><select id="vf-trip">${tripOptions(v0.trip_id)}${NEW_TRIP_OPT}</select></label>
       </div>
       ${newTripFields('vf-trip')}
+      <label class="field" id="vf-role-wrap" ${v0.trip_id ? '' : 'hidden'}><span>Plass på reisen</span><select id="vf-role">
+        <option value="">Stopp underveis (sortert etter dato)</option>
+        <option value="start" ${v0.trip_role === 'start' ? 'selected' : ''}>Start på reisen</option>
+        <option value="end" ${v0.trip_role === 'end' ? 'selected' : ''}>Slutt på reisen</option>
+      </select></label>
       ${peoplePicker('vf-people', existing ? v0.people ?? [] : meIds())}
       <div class="field-row">
         <label class="field"><span>Lengde (km)</span><input id="vf-km" inputmode="decimal" value="${v0.distance_km ?? ''}" /></label>
@@ -1205,6 +1214,7 @@ function visitForm(place, existing = null) {
     (d) => {
       wirePeoplePicker(d);
       wireNewTrip(d, 'vf-trip', '#vf-date');
+      $('#vf-trip', d).addEventListener('change', (e) => ($('#vf-role-wrap', d).hidden = !e.target.value));
       d.querySelectorAll('[data-del-track]').forEach((b) =>
         b.addEventListener('click', async () => {
           const { error } = await supabase.from('tracks').delete().eq('id', b.dataset.delTrack);
@@ -1283,6 +1293,7 @@ function visitForm(place, existing = null) {
         };
         try {
           row.trip_id = await resolveTrip(d, 'vf-trip');
+          row.trip_role = row.trip_id ? $('#vf-role', d).value || null : null;
           let id = existing?.id;
           if (existing) {
             const { error } = await supabase.from('visits').update(row).eq('id', id);

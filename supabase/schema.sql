@@ -246,3 +246,7 @@ create policy "members_all" on public.trip_legs for all to authenticated using (
 
 -- 16. Bilder som ligger langt fra stedet sitt, men er bekreftet riktige -----------
 alter table public.photos add column if not exists position_ok boolean not null default false;
+
+
+-- Start/slutt på reisen per besøk (styrer rekkefølgen på stoppene)
+alter table public.visits add column if not exists trip_role text check (trip_role in ('start','end'));
